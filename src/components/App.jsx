@@ -85,7 +85,7 @@ const MOBILE_BREAKPOINT = 1024;
 const PHONE_BREAKPOINT = 480;
 const DEFAULT_CANVAS_MODE_ID = 'geometry';
 const POWERSHELL_OUTPUT_COMMAND =
-  '$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-Content -Encoding utf8 <path>';
+  '$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Invoke-RestMethod -Uri "$env:API_BASE/api/v1/..." -Method Get | ConvertTo-Json -Depth 10';
 const OPEN_SOURCE_REPOSITORY_SEGMENTS = Object.freeze([
   'github.com',
   'Chloemlla',
@@ -138,6 +138,229 @@ const CANVAS_MODES = [
     stageLabel: 'Classic Math Stage',
     stageTip: '适合混合几何、函数与综合探索',
     readyHint: '可以执行混合数学脚本并在统一工作台中观察结果',
+  },
+];
+
+const COMMERCIALIZATION_PRIORITIES = [
+  {
+    id: 'image-to-script',
+    stage: 'P0',
+    title: '图片转 GeoGebra 指令',
+    value: '这是最容易被付费购买的能力，因为它直接把“不会写脚本”变成“能快速出图”。',
+    implementation:
+      '前端上传课堂截图、手绘草图或题目配图，后端用多模态模型解析成 scene spec，再生成可执行的 GeoGebra commands。',
+    monetization: '按次消耗 AI credits，或打包进 Pro / 教培机构版订阅。',
+    kpi: '关注图片转脚本成功率、首次出图耗时、生成后人工修改率。',
+  },
+  {
+    id: 'share-canvas',
+    stage: 'P0',
+    title: '分享画布与可复用链接',
+    value: '这是增长飞轮，不只是“导出图片”，而是让别人能打开链接继续拖拽、查看脚本和二次创作。',
+    implementation:
+      '后端保存脚本、截图、画布模式、视口和作者信息，生成 share slug、预览图和埋点统计。',
+    monetization: '免费版公开分享带水印；付费版支持私密分享、品牌页、访问数据和嵌入站点。',
+    kpi: '关注分享创建率、分享打开率、二次编辑率和自然新增用户占比。',
+  },
+  {
+    id: 'workspace-review',
+    stage: 'P1',
+    title: '模板库、团队空间与审阅',
+    value: '这部分决定客单价，尤其对学校、教培、课程内容团队和企业培训部门有价值。',
+    implementation:
+      '给项目、模板、评论、版本和角色权限建模，把个人工具升级成团队资产平台。',
+    monetization: '席位制订阅、机构空间、模板市场分成和私有部署。',
+    kpi: '关注团队留存、模板复用率、月活机构数和付费转化率。',
+  },
+];
+
+const COMMERCIALIZATION_FLOW = [
+  '前端上传图片或题目截图，先拿到上传凭证与 assetId。',
+  '后端异步创建 AI drawing job，生成 scene spec、GeoGebra 指令和渲染建议。',
+  '前端轮询任务状态，成功后把 commands 注入现有执行器，在 GeoGebra 画布中渲染。',
+  '用户继续拖拽、修正、保存，再生成分享链接形成增长闭环。',
+];
+
+const API_RESPONSE_ENVELOPE = `{
+  "success": true,
+  "code": "OK",
+  "message": "drawing job accepted",
+  "requestId": "req_01JV7Q4V7V5G1YF0AX5WG4N7Q2",
+  "data": {},
+  "meta": {
+    "timestamp": "2026-04-25T14:10:00.000Z",
+    "version": "v1"
+  },
+  "error": null
+}`;
+
+const POWERSHELL_UTF8_NOTE = `# 所有接口都返回 UTF-8 JSON，PowerShell 调试时先固定输出编码
+${POWERSHELL_OUTPUT_COMMAND}`;
+
+const API_ENDPOINT_BLUEPRINT = [
+  {
+    id: 'asset-upload',
+    method: 'POST',
+    path: '/api/v1/assets/uploads',
+    title: '申请上传凭证',
+    description:
+      '先向业务后端申请临时上传 URL，而不是把图片直接打到模型服务。这样便于做鉴权、限流、审计和对象存储隔离。',
+    request: `{
+  "filename": "triangle-sketch.png",
+  "mimeType": "image/png",
+  "size": 421993,
+  "purpose": "ai_drawing_input",
+  "canvasMode": "geometry"
+}`,
+    response: `{
+  "success": true,
+  "code": "UPLOAD_URL_CREATED",
+  "message": "upload slot created",
+  "requestId": "req_01JV7Q5EVK0X8VMEVQ4XVB8P6T",
+  "data": {
+    "assetId": "asset_01JV7Q5F9CW4S8FBCV7S9F1A7M",
+    "uploadUrl": "https://storage.example.com/presigned-put",
+    "fileUrl": "https://cdn.example.com/assets/asset_01JV7Q5F9CW4S8FBCV7S9F1A7M.png",
+    "expiresIn": 900
+  }
+}`,
+    powershell: `$body = @{
+  filename = "triangle-sketch.png"
+  mimeType = "image/png"
+  size = 421993
+  purpose = "ai_drawing_input"
+  canvasMode = "geometry"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "$env:API_BASE/api/v1/assets/uploads" -Method Post -ContentType "application/json; charset=utf-8" -Body $body | ConvertTo-Json -Depth 10`,
+  },
+  {
+    id: 'drawing-job',
+    method: 'POST',
+    path: '/api/v1/ai/drawing-jobs',
+    title: '创建 AI 绘图任务',
+    description:
+      '真正的 AI 工作放在异步任务里，避免前端请求超时。任务负责图片理解、几何对象识别、GeoGebra 命令生成和安全校验。',
+    request: `{
+  "assetId": "asset_01JV7Q5F9CW4S8FBCV7S9F1A7M",
+  "prompt": "识别图中的三角形与中线，并输出可执行脚本",
+  "canvasMode": "geometry",
+  "responseFormat": "geogebra_commands_v1",
+  "locale": "zh-CN"
+}`,
+    response: `{
+  "success": true,
+  "code": "JOB_ACCEPTED",
+  "message": "drawing job queued",
+  "requestId": "req_01JV7Q6Z53WQH4Q2JQ4T7MM9TS",
+  "data": {
+    "jobId": "job_01JV7Q708K7W6FDH3Y4SEB4T5W",
+    "status": "queued",
+    "pollUrl": "/api/v1/ai/drawing-jobs/job_01JV7Q708K7W6FDH3Y4SEB4T5W",
+    "creditsReserved": 12,
+    "estimatedLatencyMs": 6000
+  }
+}`,
+    powershell: `$body = @{
+  assetId = "asset_01JV7Q5F9CW4S8FBCV7S9F1A7M"
+  prompt = "识别图中的三角形与中线，并输出可执行脚本"
+  canvasMode = "geometry"
+  responseFormat = "geogebra_commands_v1"
+  locale = "zh-CN"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs" -Method Post -ContentType "application/json; charset=utf-8" -Body $body | ConvertTo-Json -Depth 10`,
+  },
+  {
+    id: 'drawing-job-status',
+    method: 'GET',
+    path: '/api/v1/ai/drawing-jobs/{jobId}',
+    title: '查询任务结果',
+    description:
+      '前端轮询这个接口，当 status=completed 时直接把 commands 交给现有 Dispatcher。返回体里要同时带 scene spec、渲染建议和风险提示。',
+    request: `GET /api/v1/ai/drawing-jobs/job_01JV7Q708K7W6FDH3Y4SEB4T5W`,
+    response: `{
+  "success": true,
+  "code": "JOB_COMPLETED",
+  "message": "drawing job completed",
+  "requestId": "req_01JV7Q8T7SK5EXNV8C5P4S5E1S",
+  "data": {
+    "jobId": "job_01JV7Q708K7W6FDH3Y4SEB4T5W",
+    "status": "completed",
+    "sceneSummary": "识别出三角形 ABC 及边 BC 的中点 M",
+    "canvasMode": "geometry",
+    "commands": [
+      "A = (-3, 0)",
+      "B = (3, 0)",
+      "C = (1, 4)",
+      "tri = Polygon(A, B, C)",
+      "M = Midpoint(B, C)",
+      "median = Segment(A, M)"
+    ],
+    "renderHints": {
+      "resetBeforeRun": true,
+      "suggestedViewport": { "xmin": -5, "xmax": 5, "ymin": -2, "ymax": 6 }
+    },
+    "diagnostics": {
+      "confidence": 0.92,
+      "humanReviewRecommended": false
+    }
+  }
+}`,
+    powershell: `Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs/job_01JV7Q708K7W6FDH3Y4SEB4T5W" -Method Get | ConvertTo-Json -Depth 10`,
+  },
+  {
+    id: 'share-canvas',
+    method: 'POST',
+    path: '/api/v1/shares',
+    title: '创建分享画布',
+    description:
+      '分享接口不要只存图片，至少要保存脚本、截图、画布模式、版本、访问权限和作者信息，否则无法形成真正的协作与传播能力。',
+    request: `{
+  "title": "三角形中线示例",
+  "canvasMode": "geometry",
+  "commands": [
+    "A = (-3, 0)",
+    "B = (3, 0)",
+    "C = (1, 4)",
+    "tri = Polygon(A, B, C)",
+    "M = Midpoint(B, C)",
+    "median = Segment(A, M)"
+  ],
+  "coverAssetId": "asset_01JV7QAH3X6R2W8G7QJW6Q2E8B",
+  "visibility": "public",
+  "allowFork": true
+}`,
+    response: `{
+  "success": true,
+  "code": "SHARE_CREATED",
+  "message": "share published",
+  "requestId": "req_01JV7QB2B9T6R0W6NP8FBR4Y9G",
+  "data": {
+    "shareId": "share_01JV7QB9N2SQVG2YE2WZ4G2QH7",
+    "slug": "median-demo-8h2f",
+    "shareUrl": "https://app.example.com/s/median-demo-8h2f",
+    "embedUrl": "https://app.example.com/embed/median-demo-8h2f",
+    "posterUrl": "https://cdn.example.com/shares/median-demo-8h2f/poster.png"
+  }
+}`,
+    powershell: `$body = @{
+  title = "三角形中线示例"
+  canvasMode = "geometry"
+  commands = @(
+    "A = (-3, 0)",
+    "B = (3, 0)",
+    "C = (1, 4)",
+    "tri = Polygon(A, B, C)",
+    "M = Midpoint(B, C)",
+    "median = Segment(A, M)"
+  )
+  coverAssetId = "asset_01JV7QAH3X6R2W8G7QJW6Q2E8B"
+  visibility = "public"
+  allowFork = $true
+} | ConvertTo-Json -Depth 10
+
+Invoke-RestMethod -Uri "$env:API_BASE/api/v1/shares" -Method Post -ContentType "application/json; charset=utf-8" -Body $body | ConvertTo-Json -Depth 10`,
   },
 ];
 
@@ -878,6 +1101,120 @@ const App = () => {
                 <p>{snippet.description}</p>
                 <span className="starter-action">载入这个示例</span>
               </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="chapter chapter-light strategy-section">
+          <div className="chapter-header">
+            <div>
+              <span className="section-kicker">Commercial Plan</span>
+              <h2>商业化功能优先级</h2>
+              <p>
+                真正能带来收入的不是单纯多几个按钮，而是把“上传图片
+                → AI 生成命令 → 前端渲染 → 分享传播”这条链路打成一个可复用工作流。
+              </p>
+            </div>
+
+            <article className="strategy-note-card">
+              <span className="card-kicker">优先原则</span>
+              <strong>先做高频出图，再做传播，再做团队资产化</strong>
+              <p>
+                如果一开始就堆协作、评论、组织架构，用户不会马上付费。先把 AI
+                生图到脚本这件事做到稳定，才有商业价值。
+              </p>
+            </article>
+          </div>
+
+          <div className="strategy-grid">
+            {COMMERCIALIZATION_PRIORITIES.map((item) => (
+              <article key={item.id} className="strategy-card">
+                <div className="strategy-card-top">
+                  <span className="strategy-stage">{item.stage}</span>
+                  <span className="strategy-title">{item.title}</span>
+                </div>
+                <p className="strategy-value">{item.value}</p>
+                <div className="strategy-copy">
+                  <strong>实现方式</strong>
+                  <p>{item.implementation}</p>
+                </div>
+                <div className="strategy-copy">
+                  <strong>收费方式</strong>
+                  <p>{item.monetization}</p>
+                </div>
+                <div className="strategy-copy">
+                  <strong>核心指标</strong>
+                  <p>{item.kpi}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <article className="strategy-flow-card">
+            <div>
+              <span className="card-kicker">Growth Loop</span>
+              <strong>推荐先落地的最小商业闭环</strong>
+            </div>
+            <ol className="strategy-flow-list">
+              {COMMERCIALIZATION_FLOW.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+          </article>
+        </section>
+
+        <section className="chapter chapter-white api-section">
+          <div className="chapter-header">
+            <div>
+              <span className="section-kicker">API Contract</span>
+              <h2>后端接口与 PowerShell 返回格式</h2>
+              <p>
+                下面这组接口是前端上传图片、后端 AI 生成绘图指令、前端回放渲染与分享画布的最小可行后端。
+                所有返回统一为 UTF-8 JSON，避免调试时中文乱码。
+              </p>
+            </div>
+          </div>
+
+          <div className="api-summary-grid">
+            <article className="api-summary-card">
+              <span className="card-kicker">统一返回结构</span>
+              <pre className="api-code-block">{API_RESPONSE_ENVELOPE}</pre>
+            </article>
+
+            <article className="api-summary-card">
+              <span className="card-kicker">PowerShell UTF-8</span>
+              <pre className="api-code-block">{POWERSHELL_UTF8_NOTE}</pre>
+            </article>
+          </div>
+
+          <div className="api-endpoint-grid">
+            {API_ENDPOINT_BLUEPRINT.map((endpoint) => (
+              <article key={endpoint.id} className="api-endpoint-card">
+                <div className="api-endpoint-head">
+                  <span className={`api-method api-method-${endpoint.method.toLowerCase()}`}>
+                    {endpoint.method}
+                  </span>
+                  <code className="api-path">{endpoint.path}</code>
+                </div>
+
+                <strong className="api-endpoint-title">{endpoint.title}</strong>
+                <p className="api-endpoint-description">{endpoint.description}</p>
+
+                <div className="api-code-group">
+                  <span className="api-code-label">Request</span>
+                  <pre className="api-code-block">{endpoint.request}</pre>
+                </div>
+
+                <div className="api-code-group">
+                  <span className="api-code-label">Response</span>
+                  <pre className="api-code-block">{endpoint.response}</pre>
+                </div>
+
+                <div className="api-code-group">
+                  <span className="api-code-label">PowerShell</span>
+                  <pre className="api-code-block">{endpoint.powershell}</pre>
+                </div>
+              </article>
             ))}
           </div>
         </section>
