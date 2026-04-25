@@ -1,11 +1,11 @@
-﻿use bytes::Bytes;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use http::{HeaderMap, HeaderValue, Method, StatusCode};
+use http::{HeaderValue, Method, StatusCode};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as AutoBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -37,8 +37,10 @@ impl AppConfig {
             .and_then(|value| value.parse().ok())
             .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 3001)));
 
-        let api_base_url = env::var("API_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3001".to_string());
-        let model_base_url = env::var("MODEL_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+        let api_base_url =
+            env::var("API_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3001".to_string());
+        let model_base_url =
+            env::var("MODEL_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
         let model_name = env::var("MODEL_NAME").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
         let api_key = env::var("API_KEY").unwrap_or_default();
 
@@ -270,8 +272,13 @@ struct ModelClient {
 
 impl ModelClient {
     fn new(base_url: String, model_name: String, api_key: String) -> Result<Self, AppError> {
-        let base_url = Url::parse(&base_url).map_err(|err| AppError::BadRequest(format!("invalid model base URL: {err}")))?;
-        let api_key = if api_key.trim().is_empty() { None } else { Some(api_key) };
+        let base_url = Url::parse(&base_url)
+            .map_err(|err| AppError::BadRequest(format!("invalid model base URL: {err}")))?;
+        let api_key = if api_key.trim().is_empty() {
+            None
+        } else {
+            Some(api_key)
+        };
 
         Ok(Self {
             base_url,
@@ -289,7 +296,10 @@ impl ModelClient {
         }
     }
 
-    async fn generate_drawing_commands(&self, input: &DrawingJobCreateRequest) -> Result<ModelDrawingResponse, AppError> {
+    async fn generate_drawing_commands(
+        &self,
+        input: &DrawingJobCreateRequest,
+    ) -> Result<ModelDrawingResponse, AppError> {
         let endpoint = self
             .base_url
             .join("/chat/completions")
@@ -321,7 +331,10 @@ impl ModelClient {
             .map_err(|err| AppError::Internal(format!("model request failed: {err}")))?;
 
         if !response.status().is_success() {
-            return Err(AppError::Internal(format!("model provider returned {}", response.status())));
+            return Err(AppError::Internal(format!(
+                "model provider returned {}",
+                response.status()
+            )));
         }
 
         let json: Value = response
@@ -344,7 +357,8 @@ struct ModelDrawingResponse {
 impl ModelDrawingResponse {
     fn fallback() -> Self {
         Self {
-            scene_summary: "model output is unavailable, fallback command set generated locally".to_string(),
+            scene_summary: "model output is unavailable, fallback command set generated locally"
+                .to_string(),
             commands: vec![
                 "A = (-3, 0)".to_string(),
                 "B = (3, 0)".to_string(),
@@ -427,7 +441,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let listener = TcpListener::bind(state.config.bind_addr).await?;
-    println!("geograba-backend listening on http://{}", state.config.bind_addr);
+    println!(
+        "geograba-backend listening on http://{}",
+        state.config.bind_addr
+    );
 
     loop {
         let (stream, _) = listener.accept().await?;
@@ -436,7 +453,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tokio::spawn(async move {
             let service = service_fn(move |request| handle_request(request, state.clone()));
             if let Err(error) = AutoBuilder::new(TokioExecutor::new())
-                .serve_connection(stream, service)
+                .serve_connection(TokioIo::new(stream), service)
                 .await
             {
                 eprintln!("connection error: {error}");
@@ -457,36 +474,66 @@ async fn handle_request(
     Ok(response)
 }
 
-async fn route_request(request: Request<Incoming>, state: AppState) -> Result<Response<Full<Bytes>>, AppError> {
+async fn route_request(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
     let method = request.method().clone();
     let path = request.uri().path().to_string();
+    let is_drawing_job_get = method == Method::GET && path.starts_with("/api/v1/ai/drawing-jobs/");
 
     match (method, path.as_str()) {
-        (Method::GET, "/health") => Ok(json_response(StatusCode::OK, envelope(true, "OK", "service is healthy", request_id(), Some(json!({"status": "ok"})), None))),
-        (Method::GET, "/api/v1/model/config") => Ok(json_response(StatusCode::OK, envelope(true, "MODEL_CONFIG", "current model config", request_id(), Some(json!(state.model_client.view())), None))),
+        (Method::GET, "/health") => Ok(json_response(
+            StatusCode::OK,
+            envelope(
+                true,
+                "OK",
+                "service is healthy",
+                request_id(),
+                Some(json!({"status": "ok"})),
+                None,
+            ),
+        )),
+        (Method::GET, "/api/v1/model/config") => Ok(json_response(
+            StatusCode::OK,
+            envelope(
+                true,
+                "MODEL_CONFIG",
+                "current model config",
+                request_id(),
+                Some(json!(state.model_client.view())),
+                None,
+            ),
+        )),
         (Method::PUT, "/api/v1/model/config") => update_model_config(request, state).await,
         (Method::POST, "/api/v1/assets/uploads") => create_upload(request, state).await,
         (Method::POST, "/api/v1/ai/drawing-jobs") => create_drawing_job(request, state).await,
         (Method::GET, "/api/v1/ai/drawing-jobs/demo") => get_demo_job(state).await,
         (Method::POST, "/api/v1/shares") => create_share(request, state).await,
-        _ if method == Method::GET && path.starts_with("/api/v1/ai/drawing-jobs/") => get_drawing_job(path, state).await,
+        _ if is_drawing_job_get => get_drawing_job(path, state).await,
         _ => Err(AppError::NotFound),
     }
 }
 
-async fn update_model_config(request: Request<Incoming>, state: AppState) -> Result<Response<Full<Bytes>>, AppError> {
+async fn update_model_config(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
     let body = read_json(request).await?;
     let payload: ModelConfigUpdateRequest = serde_json::from_value(body)
         .map_err(|err| AppError::BadRequest(format!("invalid model config body: {err}")))?;
 
-    let base_url = payload.base_url.unwrap_or_else(|| state.config.model_base_url.clone());
-    let model_name = payload.model_name.unwrap_or_else(|| state.config.model_name.clone());
-    let api_key = payload.api_key.unwrap_or_else(|| state.config.api_key.clone());
+    let base_url = payload
+        .base_url
+        .unwrap_or_else(|| state.config.model_base_url.clone());
+    let model_name = payload
+        .model_name
+        .unwrap_or_else(|| state.config.model_name.clone());
+    let api_key = payload
+        .api_key
+        .unwrap_or_else(|| state.config.api_key.clone());
 
     let client = ModelClient::new(base_url, model_name, api_key)?;
-    let mut state_store = state.store.write().await;
-    drop(state_store);
-
     let mut updated_state = state;
     updated_state.model_client = Arc::new(client);
 
@@ -503,7 +550,10 @@ async fn update_model_config(request: Request<Incoming>, state: AppState) -> Res
     ))
 }
 
-async fn create_upload(request: Request<Incoming>, state: AppState) -> Result<Response<Full<Bytes>>, AppError> {
+async fn create_upload(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
     let body = read_json(request).await?;
     let payload: UploadCreateRequest = serde_json::from_value(body)
         .map_err(|err| AppError::BadRequest(format!("invalid upload body: {err}")))?;
@@ -513,8 +563,14 @@ async fn create_upload(request: Request<Incoming>, state: AppState) -> Result<Re
     }
 
     let asset_id = format!("asset_{}", short_id());
-    let upload_url = format!("{}/api/v1/uploads/{asset_id}", state.config.api_base_url.trim_end_matches('/'));
-    let file_url = format!("{}/assets/{asset_id}", state.config.api_base_url.trim_end_matches('/'));
+    let upload_url = format!(
+        "{}/api/v1/uploads/{asset_id}",
+        state.config.api_base_url.trim_end_matches('/')
+    );
+    let file_url = format!(
+        "{}/assets/{asset_id}",
+        state.config.api_base_url.trim_end_matches('/')
+    );
 
     let record = AssetRecord {
         asset_id: asset_id.clone(),
@@ -528,7 +584,12 @@ async fn create_upload(request: Request<Incoming>, state: AppState) -> Result<Re
         expires_at: Utc::now() + chrono::Duration::minutes(15),
     };
 
-    state.store.write().await.assets.insert(asset_id.clone(), record);
+    state
+        .store
+        .write()
+        .await
+        .assets
+        .insert(asset_id.clone(), record);
 
     Ok(json_response(
         StatusCode::OK,
@@ -548,19 +609,32 @@ async fn create_upload(request: Request<Incoming>, state: AppState) -> Result<Re
     ))
 }
 
-async fn create_drawing_job(request: Request<Incoming>, state: AppState) -> Result<Response<Full<Bytes>>, AppError> {
+async fn create_drawing_job(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
     let body = read_json(request).await?;
     let payload: DrawingJobCreateRequest = serde_json::from_value(body)
         .map_err(|err| AppError::BadRequest(format!("invalid drawing job body: {err}")))?;
 
-    if !state.store.read().await.assets.contains_key(&payload.asset_id) {
-        return Err(AppError::BadRequest(format!("asset not found: {}", payload.asset_id)));
+    if !state
+        .store
+        .read()
+        .await
+        .assets
+        .contains_key(&payload.asset_id)
+    {
+        return Err(AppError::BadRequest(format!(
+            "asset not found: {}",
+            payload.asset_id
+        )));
     }
 
     let job_id = format!("job_{}", short_id());
     let request_clone = payload.clone();
     let model_client = state.model_client.clone();
     let store = state.store.clone();
+    let job_id_for_task = job_id.clone();
 
     let now = Utc::now();
     let record = DrawingJobRecord {
@@ -594,7 +668,7 @@ async fn create_drawing_job(request: Request<Incoming>, state: AppState) -> Resu
         }
 
         let mut store = store.write().await;
-        if let Some(job) = store.jobs.get_mut(&job_id) {
+        if let Some(job) = store.jobs.get_mut(&job_id_for_task) {
             job.status = JobStatus::Completed;
             job.commands = result.commands;
             job.scene_summary = result.scene_summary;
@@ -667,7 +741,14 @@ async fn get_drawing_job(path: String, state: AppState) -> Result<Response<Full<
 
     Ok(json_response(
         StatusCode::OK,
-        envelope(true, "JOB_COMPLETED", "drawing job completed", request_id(), Some(json!(response)), None),
+        envelope(
+            true,
+            "JOB_COMPLETED",
+            "drawing job completed",
+            request_id(),
+            Some(json!(response)),
+            None,
+        ),
     ))
 }
 
@@ -683,7 +764,11 @@ async fn get_demo_job(state: AppState) -> Result<Response<Full<Bytes>>, AppError
             job.scene_summary.clone()
         },
         canvas_mode: job.canvas_mode.clone(),
-        commands: if job.commands.is_empty() { fallback_commands() } else { job.commands.clone() },
+        commands: if job.commands.is_empty() {
+            fallback_commands()
+        } else {
+            job.commands.clone()
+        },
         render_hints: RenderHints {
             reset_before_run: true,
             suggested_viewport: Viewport {
@@ -698,17 +783,36 @@ async fn get_demo_job(state: AppState) -> Result<Response<Full<Bytes>>, AppError
 
     Ok(json_response(
         StatusCode::OK,
-        envelope(true, "JOB_COMPLETED", "drawing job completed", request_id(), Some(json!(response)), None),
+        envelope(
+            true,
+            "JOB_COMPLETED",
+            "drawing job completed",
+            request_id(),
+            Some(json!(response)),
+            None,
+        ),
     ))
 }
 
-async fn create_share(request: Request<Incoming>, state: AppState) -> Result<Response<Full<Bytes>>, AppError> {
+async fn create_share(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
     let body = read_json(request).await?;
     let payload: ShareCreateRequest = serde_json::from_value(body)
         .map_err(|err| AppError::BadRequest(format!("invalid share body: {err}")))?;
 
-    if !state.store.read().await.assets.contains_key(&payload.cover_asset_id) {
-        return Err(AppError::BadRequest(format!("cover asset not found: {}", payload.cover_asset_id)));
+    if !state
+        .store
+        .read()
+        .await
+        .assets
+        .contains_key(&payload.cover_asset_id)
+    {
+        return Err(AppError::BadRequest(format!(
+            "cover asset not found: {}",
+            payload.cover_asset_id
+        )));
     }
 
     let share_id = format!("share_{}", short_id());
@@ -733,7 +837,12 @@ async fn create_share(request: Request<Incoming>, state: AppState) -> Result<Res
         created_at: Utc::now(),
     };
 
-    state.store.write().await.shares.insert(share_id.clone(), record);
+    state
+        .store
+        .write()
+        .await
+        .shares
+        .insert(share_id.clone(), record);
 
     Ok(json_response(
         StatusCode::OK,
@@ -762,14 +871,21 @@ async fn read_json(request: Request<Incoming>) -> Result<Value, AppError> {
         .map_err(|err| AppError::BadRequest(format!("unable to read body: {err}")))?;
 
     let bytes = body.to_bytes();
-    serde_json::from_slice(&bytes).map_err(|err| AppError::BadRequest(format!("invalid JSON: {err}")))
+    serde_json::from_slice(&bytes)
+        .map_err(|err| AppError::BadRequest(format!("invalid JSON: {err}")))
 }
 
-fn json_response<T: Serialize>(status: StatusCode, envelope: ApiEnvelope<T>) -> Response<Full<Bytes>> {
+fn json_response<T: Serialize>(
+    status: StatusCode,
+    envelope: ApiEnvelope<T>,
+) -> Response<Full<Bytes>> {
     let body = serde_json::to_vec(&envelope).unwrap_or_else(|_| b"{}".to_vec());
     let mut response = Response::new(Full::new(Bytes::from(body)));
     *response.status_mut() = status;
-    response.headers_mut().insert(http::header::CONTENT_TYPE, HeaderValue::from_static("application/json; charset=utf-8"));
+    response.headers_mut().insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
     response
 }
 
@@ -777,16 +893,46 @@ fn error_response(error: AppError) -> Response<Full<Bytes>> {
     match error {
         AppError::NotFound => json_response(
             StatusCode::NOT_FOUND,
-            envelope::<Value>(false, "NOT_FOUND", "resource not found", request_id(), None, Some(ApiErrorBody { message: "not found".to_string(), details: None })),
+            envelope::<Value>(
+                false,
+                "NOT_FOUND",
+                "resource not found",
+                request_id(),
+                None,
+                Some(ApiErrorBody {
+                    message: "not found".to_string(),
+                    details: None,
+                }),
+            ),
         ),
-        AppError::BadRequest(message) => json_response(
-            StatusCode::BAD_REQUEST,
-            envelope::<Value>(false, "BAD_REQUEST", &message, request_id(), None, Some(ApiErrorBody { message, details: None })),
-        ),
-        AppError::Internal(message) => json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            envelope::<Value>(false, "INTERNAL_ERROR", &message, request_id(), None, Some(ApiErrorBody { message, details: None })),
-        ),
+        AppError::BadRequest(message) => json_response(StatusCode::BAD_REQUEST, {
+            let response_message = message.clone();
+            envelope::<Value>(
+                false,
+                "BAD_REQUEST",
+                &response_message,
+                request_id(),
+                None,
+                Some(ApiErrorBody {
+                    message,
+                    details: None,
+                }),
+            )
+        }),
+        AppError::Internal(message) => json_response(StatusCode::INTERNAL_SERVER_ERROR, {
+            let response_message = message.clone();
+            envelope::<Value>(
+                false,
+                "INTERNAL_ERROR",
+                &response_message,
+                request_id(),
+                None,
+                Some(ApiErrorBody {
+                    message,
+                    details: None,
+                }),
+            )
+        }),
     }
 }
 
