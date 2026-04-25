@@ -830,6 +830,157 @@ const App = () => {
     ]);
   }, []);
 
+  const resetAuthForm = useCallback(() => {
+    setAuthForm({
+      account: '',
+      email: '',
+      username: '',
+      displayName: '',
+      password: '',
+      confirmPassword: '',
+    });
+  }, []);
+
+  const handleAuthFieldChange = useCallback((field, value) => {
+    setAuthForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  }, []);
+
+  const applyAuthenticatedSession = useCallback(
+    (session, successMessage) => {
+      const normalizedSession = {
+        token: session.token,
+        tokenType: session.tokenType || 'Bearer',
+        expiresAt: session.expiresAt || null,
+        user: session.user,
+      };
+
+      setAuthToken(normalizedSession.token);
+      setAuthSession(normalizedSession);
+      setAuthState({
+        state: 'authenticated',
+        message: `${normalizedSession.user.displayName || normalizedSession.user.username} 已登录`,
+      });
+      writeStoredAuthSession(normalizedSession);
+      resetAuthForm();
+      appendLog(successMessage, 'success');
+    },
+    [appendLog, resetAuthForm]
+  );
+
+  const clearAuthentication = useCallback(
+    (message, level = 'info') => {
+      clearAuthToken();
+      clearStoredAuthSession();
+      setAuthSession(null);
+      setAuthState({
+        state: 'guest',
+        message,
+      });
+
+      if (message) {
+        appendLog(message, level);
+      }
+    },
+    [appendLog]
+  );
+
+  const handleApiAuthFailure = useCallback(
+    (error, fallbackMessage = '登录状态已失效，请重新登录') => {
+      if (error?.status !== 401) {
+        return false;
+      }
+
+      clearAuthentication(fallbackMessage, 'error');
+      setAuthMode('login');
+      return true;
+    },
+    [clearAuthentication]
+  );
+
+  const handleAuthSubmit = useCallback(async () => {
+    if (isSubmittingAuth) {
+      return;
+    }
+
+    if (authMode === 'register') {
+      const email = authForm.email.trim();
+      const username = authForm.username.trim();
+      const password = authForm.password;
+      const confirmPassword = authForm.confirmPassword;
+
+      if (!email || !username || !password) {
+        alert('请完整填写注册信息');
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        alert('两次输入的密码不一致');
+        return;
+      }
+    } else if (!authForm.account.trim() || !authForm.password) {
+      alert('请输入邮箱/用户名和密码');
+      return;
+    }
+
+    setIsSubmittingAuth(true);
+
+    try {
+      if (authMode === 'register') {
+        const session = await registerUser({
+          email: authForm.email.trim(),
+          username: authForm.username.trim(),
+          displayName: authForm.displayName.trim(),
+          password: authForm.password,
+        });
+
+        applyAuthenticatedSession(
+          session,
+          `注册成功，当前已使用 ${session.user.displayName || session.user.username} 登录`
+        );
+      } else {
+        const session = await loginUser({
+          account: authForm.account.trim(),
+          password: authForm.password,
+        });
+
+        applyAuthenticatedSession(
+          session,
+          `登录成功，欢迎回来 ${session.user.displayName || session.user.username}`
+        );
+      }
+    } catch (error) {
+      setAuthState({
+        state: 'error',
+        message: error.message,
+      });
+      appendLog(`认证失败：${error.message}`, 'error');
+      alert(error.message);
+    } finally {
+      setIsSubmittingAuth(false);
+    }
+  }, [applyAuthenticatedSession, appendLog, authForm, authMode, isSubmittingAuth]);
+
+  const handleLogout = useCallback(async () => {
+    if (isSubmittingAuth) {
+      return;
+    }
+
+    setIsSubmittingAuth(true);
+
+    try {
+      await logoutUser();
+    } catch (error) {
+      appendLog(`退出登录请求失败：${error.message}`, 'error');
+    } finally {
+      clearAuthentication('已退出登录');
+      setAuthMode('login');
+      setIsSubmittingAuth(false);
+    }
+  }, [appendLog, clearAuthentication, isSubmittingAuth]);
+
   const refreshAdminDashboard = useCallback(async (options = {}) => {
     const { silent = false } = options;
 
