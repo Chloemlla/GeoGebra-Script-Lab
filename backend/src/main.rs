@@ -92,23 +92,6 @@ struct ApiErrorBody {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct UploadCreateResponse {
-    asset_id: String,
-    upload_url: String,
-    file_url: String,
-    expires_in: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct DrawingJobCreateResponse {
-    job_id: String,
-    status: String,
-    poll_url: String,
-    credits_reserved: u32,
-    estimated_latency_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct DrawingJobResultResponse {
     job_id: String,
     status: String,
@@ -137,15 +120,6 @@ struct Viewport {
 struct Diagnostics {
     confidence: f32,
     human_review_recommended: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ShareCreateResponse {
-    share_id: String,
-    slug: String,
-    share_url: String,
-    embed_url: String,
-    poster_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
