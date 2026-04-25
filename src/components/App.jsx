@@ -522,6 +522,44 @@ const dataUrlToFile = async (dataUrl, filename) => {
   });
 };
 
+const mapProjectToApiPayload = (project) => ({
+  projectId: project.id,
+  title: project.title,
+  folder: project.folder,
+  tags: project.tags ?? [],
+  isFavorite: Boolean(project.isFavorite),
+  canvasMode: project.canvasModeId,
+  code: project.code,
+  lastOpenedAt: project.lastOpenedAt,
+  updatedAt: project.updatedAt,
+});
+
+const hydrateProjectFromApi = (remoteProject, localProject = null) => ({
+  ...(localProject ?? {}),
+  id: remoteProject.projectId,
+  title: remoteProject.title,
+  folder: remoteProject.folder,
+  tags: remoteProject.tags ?? [],
+  isFavorite: Boolean(remoteProject.isFavorite),
+  canvasModeId: remoteProject.canvasMode,
+  code: remoteProject.latestCode,
+  createdAt: remoteProject.createdAt,
+  updatedAt: remoteProject.updatedAt,
+  lastOpenedAt: remoteProject.lastOpenedAt ?? remoteProject.updatedAt,
+  remoteUpdatedAt: remoteProject.updatedAt,
+  latestVersionId: remoteProject.latestVersionId ?? null,
+});
+
+const hydrateVersionFromApi = (version) => ({
+  id: version.versionId,
+  label: version.label,
+  code: version.code,
+  canvasModeId: version.canvasMode,
+  createdAt: version.createdAt,
+  trigger: version.trigger,
+  summary: version.summary,
+});
+
 const App = () => {
   const storedStudioState = readStudioState();
   const storedAuthSessionRef = useRef(readStoredAuthSession());
@@ -584,6 +622,12 @@ const App = () => {
   const [isAdminAutoRefresh, setIsAdminAutoRefresh] = useState(true);
   const [savedProjects, setSavedProjects] = useState(storedStudioState.projects);
   const [currentProjectId, setCurrentProjectId] = useState(storedCurrentProject?.id ?? null);
+  const [cloudSyncState, setCloudSyncState] = useState({
+    state: 'idle',
+    message: '等待首次云端同步',
+    workspaceKey: getWorkspaceKey(),
+    lastSyncedAt: null,
+  });
   const [projectDraft, setProjectDraft] = useState({
     title: storedCurrentProject?.title ?? DEFAULT_PROJECT_TITLE,
     folder: storedCurrentProject?.folder ?? DEFAULT_PROJECT_FOLDER,
@@ -611,8 +655,22 @@ const App = () => {
   const [presentationMode, setPresentationMode] = useState(false);
   const [scriptInsights, setScriptInsights] = useState(null);
   const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
+  const [annotationJobResult, setAnnotationJobResult] = useState(null);
+  const [selectedAnnotationIds, setSelectedAnnotationIds] = useState([]);
+  const [isGeneratingAnnotations, setIsGeneratingAnnotations] = useState(false);
+  const [objectExplanationResult, setObjectExplanationResult] = useState(null);
+  const [isGeneratingObjectExplanations, setIsGeneratingObjectExplanations] = useState(false);
   const [versionComparison, setVersionComparison] = useState(null);
   const [versionCursor, setVersionCursor] = useState(-1);
+  const [exportDraft, setExportDraft] = useState({
+    format: 'svg',
+    includeGrid: false,
+    includeAxes: true,
+    width: 1280,
+    height: 720,
+  });
+  const [latestExportJob, setLatestExportJob] = useState(null);
+  const [isCreatingExportJob, setIsCreatingExportJob] = useState(false);
   const [generationPrompt, setGenerationPrompt] = useState(DEFAULT_GENERATION_PROMPT);
   const [referenceFile, setReferenceFile] = useState(null);
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
@@ -704,6 +762,18 @@ const App = () => {
     canvasDrift.isDirty
     && driftBaselineCodeRef.current !== null
     && driftBaselineCodeRef.current !== code;
+  const cloudSyncTone =
+    cloudSyncState.state === 'synced'
+      ? 'success'
+      : cloudSyncState.state === 'error'
+      ? 'danger'
+      : cloudSyncState.state === 'syncing'
+      ? 'accent'
+      : 'neutral';
+  const focusObjectNames =
+    selectedStyleNames.length > 0
+      ? selectedStyleNames
+      : availableObjectNames.slice(0, 6);
 
   const backendTone =
     backendStatus.state === 'connected'
@@ -822,6 +892,97 @@ const App = () => {
       return nextProject;
     },
     [code, commitProjects, currentProjectId, projectDraft, savedProjects, selectedCanvasModeId]
+  );
+
+  const hydrateProjectVersionsFromCloud = useCallback(
+    async (projectId) => {
+      if (!projectId) {
+        return;
+      }
+
+      const versions = await listProjectVersions(projectId);
+      const localProject = savedProjects.find((project) => project.id === projectId) ?? null;
+      if (!localProject) {
+        return;
+      }
+
+      const nextProject = {
+        ...localProject,
+        versions: versions.map(hydrateVersionFromApi),
+      };
+      commitProjects(upsertProject(savedProjects, nextProject), projectId);
+    },
+    [commitProjects, savedProjects]
+  );
+
+  const syncProjectToCloud = useCallback(
+    async ({ project, versionLabel = null, trigger = 'autosave' }) => {
+      if (!project) {
+        return null;
+      }
+
+      setCloudSyncState((prev) => ({
+        ...prev,
+        state: 'syncing',
+        message: `正在同步项目：${project.title}`,
+      }));
+
+      try {
+        let remoteProject = null;
+
+        try {
+          remoteProject = await fetchProject(project.id);
+        } catch (error) {
+          if (error.status !== 404) {
+            throw error;
+          }
+        }
+
+        const payload = mapProjectToApiPayload(project);
+        const upsertedProject = remoteProject
+          ? await updateProject(project.id, payload)
+          : await createProject(payload);
+
+        let nextProject = hydrateProjectFromApi(upsertedProject, project);
+
+        if (versionLabel) {
+          const version = createVersionRecord({
+            label: versionLabel,
+            code: project.code,
+            canvasModeId: project.canvasModeId,
+            trigger,
+          });
+          const remoteVersion = await createProjectVersion(project.id, {
+            versionId: version.id,
+            label: version.label,
+            trigger: version.trigger,
+            canvasMode: version.canvasModeId,
+            code: version.code,
+            summary: version.summary,
+          });
+
+          nextProject = attachVersionToProject(nextProject, hydrateVersionFromApi(remoteVersion));
+          nextProject.latestVersionId = remoteVersion.versionId;
+        }
+
+        commitProjects(upsertProject(savedProjects, nextProject), nextProject.id);
+        setCloudSyncState((prev) => ({
+          ...prev,
+          state: 'synced',
+          message: `云端已同步：${nextProject.title}`,
+          lastSyncedAt: new Date().toISOString(),
+        }));
+        return nextProject;
+      } catch (error) {
+        setCloudSyncState((prev) => ({
+          ...prev,
+          state: 'error',
+          message: error.message,
+        }));
+        throw error;
+      }
+    },
+    [commitProjects, savedProjects]
   );
 
   const clearCanvasDrift = useCallback(() => {

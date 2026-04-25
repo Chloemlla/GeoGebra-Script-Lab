@@ -28,7 +28,8 @@ use crate::store::{
     find_export_job_record, find_job_record, find_project_record, find_project_versions_by_project,
     find_share_by_slug, find_user_by_email, find_user_by_id, find_user_by_username,
     list_projects_by_workspace, revoke_session_by_token, upsert_asset_record, upsert_export_job_record,
-    upsert_job_record, upsert_project_record, upsert_project_version_record, upsert_share_record,
+    upsert_job_record, upsert_project_record, upsert_project_version_record, upsert_session_record,
+    upsert_share_record, upsert_user_record,
 };
 use crate::types::{
     AnnotationJobRequest, Diagnostics, DrawingJobCreateRequest, DrawingJobRecord,
@@ -206,15 +207,8 @@ async fn register_user(
         &user,
     );
 
-    if let Some(mongo_store) = &state.mongo_store {
-        mongo_store.upsert_user(&user).await?;
-        mongo_store.upsert_session(&session).await?;
-    }
-
-    let mut store = state.store.write().await;
-    store.users.insert(user.user_id.clone(), user);
-    store.sessions.insert(session.session_id.clone(), session);
-    drop(store);
+    upsert_user_record(&state, &user).await?;
+    upsert_session_record(&state, &session).await?;
 
     Ok(json_response(
         StatusCode::CREATED,
@@ -264,15 +258,8 @@ async fn login_user(
         &user,
     );
 
-    if let Some(mongo_store) = &state.mongo_store {
-        mongo_store.upsert_user(&user).await?;
-        mongo_store.upsert_session(&session).await?;
-    }
-
-    let mut store = state.store.write().await;
-    store.users.insert(user.user_id.clone(), user);
-    store.sessions.insert(session.session_id.clone(), session);
-    drop(store);
+    upsert_user_record(&state, &user).await?;
+    upsert_session_record(&state, &session).await?;
 
     Ok(json_response(
         StatusCode::OK,
@@ -978,7 +965,6 @@ async fn upload_asset(
         )));
     }
 
-    state.asset_file_store.save(asset_id, &bytes).await?;
     record_snapshot.mime_type = persisted_content_type.clone();
     record_snapshot.uploaded = true;
     record_snapshot.uploaded_bytes = uploaded_bytes;

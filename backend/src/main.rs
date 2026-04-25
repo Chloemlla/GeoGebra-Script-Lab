@@ -8,7 +8,6 @@ mod http;
 mod metrics;
 mod model;
 mod state;
-mod storage;
 mod store;
 mod types;
 mod utils;
