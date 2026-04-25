@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import './BackendPanel.css';
 
 const STATUS_META = {
@@ -27,6 +27,8 @@ const BackendPanel = ({
   latestJobResult,
   latestShare,
   activeShareSlug,
+  isAuthenticated = false,
+  authUserLabel = '',
   canPublish = false,
   isGenerating = false,
   isPublishing = false,
@@ -85,7 +87,7 @@ const BackendPanel = ({
               type="button"
               className="backend-btn backend-btn-primary"
               onClick={onGenerate}
-              disabled={isGenerating || isPublishing}
+              disabled={!isAuthenticated || isGenerating || isPublishing}
             >
               {isGenerating ? '生成中...' : '调用后端生成脚本'}
             </button>
@@ -94,11 +96,17 @@ const BackendPanel = ({
               type="button"
               className="backend-btn backend-btn-secondary"
               onClick={onPublish}
-              disabled={!canPublish || isGenerating || isPublishing}
+              disabled={!isAuthenticated || !canPublish || isGenerating || isPublishing}
             >
               {isPublishing ? '发布中...' : '发布当前分享'}
             </button>
           </div>
+
+          <p className="backend-auth-hint">
+            {isAuthenticated
+              ? `当前以后端身份 ${authUserLabel} 发起请求。`
+              : '登录后才能调用上传、AI 生成和分享接口。'}
+          </p>
         </article>
 
         <article className="backend-card">
@@ -113,6 +121,11 @@ const BackendPanel = ({
             <div className="backend-metric">
               <span>Provider</span>
               <code>{backendStatus?.providerBaseUrl || '--'}</code>
+            </div>
+
+            <div className="backend-metric">
+              <span>Auth</span>
+              <strong>{isAuthenticated ? authUserLabel : '未登录'}</strong>
             </div>
 
             <div className="backend-metric">
@@ -164,4 +177,4 @@ const BackendPanel = ({
   );
 };
 
-export default BackendPanel;
+export default memo(BackendPanel);

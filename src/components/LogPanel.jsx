@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { memo, useEffect, useRef } from 'react';
 import AppIcon from './AppIcon';
 import './LogPanel.css';
 
@@ -126,4 +126,4 @@ const LogPanel = ({ logs = [], errors = [], isExecuting = false, executionStats 
   );
 };
 
-export default LogPanel;
+export default memo(LogPanel);

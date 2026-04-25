@@ -1,8 +1,17 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, {
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import GeoGebraContainer from './GeoGebraContainer';
 import CodeEditor from './CodeEditor';
 import ControlPanel from './ControlPanel';
 import AdminConsole from './AdminConsole';
+import AuthPanel from './AuthPanel';
 import BackendPanel from './BackendPanel';
 import LogPanel from './LogPanel';
 import AppIcon from './AppIcon';
@@ -10,17 +19,28 @@ import GeoGebraEngine from '../engine/GeoGebraEngine';
 import Preprocessor from '../engine/Preprocessor';
 import Dispatcher from '../engine/Dispatcher';
 import {
+  clearAuthToken,
   createDrawingJob,
   createScriptInsights,
   createShare,
   fetchAdminDashboard,
   fetchHealth,
+  fetchCurrentUser,
   fetchModelConfig,
   fetchShare,
+  loginUser,
+  logoutUser,
   pollDrawingJob,
   reserveUpload,
+  registerUser,
+  setAuthToken,
   uploadAsset,
 } from '../api/backend';
+import {
+  clearStoredAuthSession,
+  readStoredAuthSession,
+  writeStoredAuthSession,
+} from '../utils/auth';
 import {
   appendInsightCommentsToCode,
   attachVersionToProject,
@@ -122,20 +142,26 @@ const DEFAULT_PROJECT_FOLDER = '个人空间';
 const SHARE_QUERY_KEY = 'share';
 const POWERSHELL_BOOTSTRAP = `$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
 
-function Format-ApiJson {
+function Invoke-ApiJson {
   param(
-    [Parameter(ValueFromPipeline)] $InputObject
+    [Parameter(Mandatory)]
+    [scriptblock] $Request
   )
 
-  process {
-    $InputObject | ConvertTo-Json -Depth 10
+  $result = & $Request
+  if ($null -eq $result) {
+    return '{}'
   }
+
+  $result | ConvertTo-Json -Depth 10
 }`;
 const withPowershellJsonOutput = (command) => `${POWERSHELL_BOOTSTRAP}
 
-${command} |
-  Format-ApiJson`;
+Invoke-ApiJson {
+${command}
+}`;
 const POWERSHELL_OUTPUT_COMMAND = withPowershellJsonOutput(
   'Invoke-RestMethod -Uri "$env:API_BASE/api/v1/..." -Method Get'
 );
@@ -234,6 +260,27 @@ const COMMERCIALIZATION_FLOW = [
   '用户继续拖拽、修正、保存，再生成分享链接形成增长闭环。',
 ];
 
+const WORKFLOW_STEPS = [
+  '在编辑器中输入或载入 GeoGebra 指令。',
+  '运行后在右侧实时查看几何图形与执行结果。',
+  '拖动自由点时，可一键把新坐标同步回代码。',
+];
+
+const EDITOR_NOTES = [
+  {
+    title: 'UTF-8 中文注释',
+    description: '编辑器与命令读取保持 UTF-8，中文注释和标题不会被误读。',
+  },
+  {
+    title: '运行前自动清理画布',
+    description: '每次执行都会先重置画布，减少旧对象残留导致的误判。',
+  },
+  {
+    title: '拖拽与代码双向协作',
+    description: '允许先拖拽验证想法，再把点位同步回脚本，形成闭环。',
+  },
+];
+
 const API_RESPONSE_ENVELOPE = `{
   "success": true,
   "code": "OK",
@@ -247,7 +294,7 @@ const API_RESPONSE_ENVELOPE = `{
   "error": null
 }`;
 
-const POWERSHELL_UTF8_NOTE = `# 所有接口都返回 UTF-8 JSON，PowerShell 调试时先固定输出编码
+const POWERSHELL_UTF8_NOTE = `# 文件本身就是 UTF-8；PowerShell 调试时先固定输入/输出编码，再把返回对象统一转成 JSON
 ${POWERSHELL_OUTPUT_COMMAND}`;
 
 const API_ENDPOINT_BLUEPRINT = [
@@ -257,7 +304,7 @@ const API_ENDPOINT_BLUEPRINT = [
     path: '/api/v1/assets/uploads',
     title: '申请上传凭证',
     description:
-      '先向业务后端申请临时上传 URL，而不是把图片直接打到模型服务。这样便于做鉴权、限流、审计和对象存储隔离。',
+      '先向业务后端申请上传凭证，元数据走索引表，文件正文走独立文件存储，不要把大文件直接塞进业务记录。',
     request: `{
   "filename": "triangle-sketch.png",
   "mimeType": "image/png",
@@ -293,7 +340,7 @@ Invoke-RestMethod -Uri "$env:API_BASE/api/v1/assets/uploads" -Method Post -Conte
     path: '/api/v1/ai/drawing-jobs',
     title: '创建 AI 绘图任务',
     description:
-      '真正的 AI 工作放在异步任务里，避免前端请求超时。任务负责图片理解、几何对象识别、GeoGebra 命令生成和安全校验。',
+      '真正的 AI 工作放进受限并发队列，避免前端超时和模型服务被打爆。任务负责图片理解、几何识别、命令生成和安全校验。',
     request: `{
   "assetId": "asset_01JV7Q5F9CW4S8FBCV7S9F1A7M",
   "prompt": "识别图中的三角形与中线，并输出可执行脚本",
@@ -330,7 +377,7 @@ Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs" -Method Post -Cont
     path: '/api/v1/ai/drawing-jobs/{jobId}',
     title: '查询任务结果',
     description:
-      '前端轮询这个接口，当 status=completed 时直接把 commands 交给现有 Dispatcher。返回体里要同时带 scene spec、渲染建议和风险提示。',
+      '前端轮询这个接口，结果查询必须命中正确缓存和主键索引；当 status=completed 时再把 commands 交给现有 Dispatcher。',
     request: `GET /api/v1/ai/drawing-jobs/job_01JV7Q708K7W6FDH3Y4SEB4T5W`,
     response: `{
   "success": true,
@@ -370,7 +417,7 @@ Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs" -Method Post -Cont
     path: '/api/v1/shares',
     title: '创建分享画布',
     description:
-      '分享接口不要只存图片，至少要保存脚本、截图、画布模式、版本、访问权限和作者信息，否则无法形成真正的协作与传播能力。',
+      '分享接口不要只存图片，至少要把脚本、封面文件、画布模式、版本和访问权限拆开存好，分享 slug 与资源引用都要可索引。',
     request: `{
   "title": "三角形中线示例",
   "canvasMode": "geometry",
@@ -465,6 +512,7 @@ const dataUrlToFile = async (dataUrl, filename) => {
 
 const App = () => {
   const storedStudioState = readStudioState();
+  const storedAuthSession = readStoredAuthSession();
   const storedCurrentProject =
     storedStudioState.projects.find((project) => project.id === storedStudioState.currentProjectId)
     ?? storedStudioState.projects[0]
@@ -491,6 +539,28 @@ const App = () => {
     message: '正在检测后端连接',
     modelName: '',
     providerBaseUrl: '',
+  });
+  const [authMode, setAuthMode] = useState('login');
+  const [authState, setAuthState] = useState(
+    storedAuthSession?.token
+      ? {
+          state: 'checking',
+          message: '正在恢复登录会话',
+        }
+      : {
+          state: 'guest',
+          message: '登录后即可使用受保护的上传、AI 生成与分享接口',
+        }
+  );
+  const [authSession, setAuthSession] = useState(storedAuthSession);
+  const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
+  const [authForm, setAuthForm] = useState({
+    account: '',
+    email: '',
+    username: '',
+    displayName: '',
+    password: '',
+    confirmPassword: '',
   });
   const [adminDashboard, setAdminDashboard] = useState(null);
   const [adminState, setAdminState] = useState({
@@ -557,6 +627,8 @@ const App = () => {
   const hasLoadedInitialShareRef = useRef(false);
   const selectedCanvasMode =
     CANVAS_MODES.find((mode) => mode.id === selectedCanvasModeId) ?? CANVAS_MODES[0];
+  const currentUser = authSession?.user ?? null;
+  const isAuthenticated = authState.state === 'authenticated' && Boolean(authSession?.token && currentUser);
 
   const isCompactLayout = viewportWidth <= MOBILE_BREAKPOINT;
   const isPhoneLayout = viewportWidth <= PHONE_BREAKPOINT;
@@ -615,13 +687,27 @@ const App = () => {
       : backendStatus.state === 'error'
       ? 'danger'
       : 'neutral';
+  const authTone =
+    authState.state === 'authenticated'
+      ? 'success'
+      : authState.state === 'error'
+      ? 'danger'
+      : 'neutral';
   const backendStatusText =
     backendStatus.state === 'connected'
       ? `API ready: ${backendStatus.modelName || 'model'}`
       : backendStatus.state === 'error'
       ? 'API unavailable'
       : 'API checking';
-  const canPublishShare = code.trim().length > 0 && !isExecuting && !isGeneratingScript;
+  const authStatusText = isAuthenticated
+    ? `${currentUser.displayName || currentUser.username}`
+    : authState.state === 'checking'
+    ? '会话恢复中'
+    : '未登录';
+  const authUserLabel = currentUser
+    ? `${currentUser.displayName || currentUser.username} (@${currentUser.username})`
+    : '';
+  const canPublishShare = isAuthenticated && code.trim().length > 0 && !isExecuting && !isGeneratingScript;
 
   const overviewMetrics = [
     {

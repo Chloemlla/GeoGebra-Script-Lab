@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import AppIcon from './AppIcon';
 import './ControlPanel.css';
 
@@ -194,4 +194,4 @@ const ControlPanel = ({
   );
 };
 
-export default ControlPanel;
+export default memo(ControlPanel);

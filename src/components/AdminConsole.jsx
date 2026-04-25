@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import './AdminConsole.css';
 
 const EMPTY_METRICS = [];
@@ -522,4 +522,4 @@ const AdminConsole = ({
   );
 };
 
-export default AdminConsole;
+export default memo(AdminConsole);

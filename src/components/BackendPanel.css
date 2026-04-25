@@ -36,6 +36,11 @@
   line-height: 1.6;
 }
 
+.backend-auth-hint {
+  color: #6e6e73;
+  line-height: 1.6;
+}
+
 .backend-status {
   min-width: 260px;
   display: flex;

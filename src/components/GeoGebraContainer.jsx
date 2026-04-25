@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { memo, useEffect, useEffectEvent, useRef, useState } from 'react';
 import GeoGebraEngine from '../engine/GeoGebraEngine';
 import AppIcon from './AppIcon';
 import './GeoGebraContainer.css';
@@ -17,11 +17,26 @@ const GeoGebraContainer = ({ onReady, height = 600, canvasMode = null }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState(8);
+  const emitReady = useEffectEvent((applet) => {
+    onReady?.(applet);
+  });
 
   const resolvedHeight = typeof height === 'number' ? height : Number.parseInt(height, 10) || 600;
   const stageLabel = canvasMode?.stageLabel ?? 'Live Geometry Stage';
   const stageTip = canvasMode?.stageTip ?? '拖拽自由点后可同步回代码';
   const readyHint = canvasMode?.readyHint ?? '可以运行脚本、拖拽自由点或导出图像';
+
+  const cleanupTimers = () => {
+    if (progressTimerRef.current) {
+      clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+
+    if (fadeTimerRef.current) {
+      clearTimeout(fadeTimerRef.current);
+      fadeTimerRef.current = null;
+    }
+  };
 
   useEffect(() => {
     if (!wrapperRef.current) {
@@ -53,18 +68,6 @@ const GeoGebraContainer = ({ onReady, height = 600, canvasMode = null }) => {
 
     let isCancelled = false;
 
-    const cleanupTimers = () => {
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-        progressTimerRef.current = null;
-      }
-
-      if (fadeTimerRef.current) {
-        clearTimeout(fadeTimerRef.current);
-        fadeTimerRef.current = null;
-      }
-    };
-
     const initGeoGebra = async () => {
       setError(null);
       setIsLoading(true);
@@ -94,10 +97,7 @@ const GeoGebraContainer = ({ onReady, height = 600, canvasMode = null }) => {
         setIsReady(true);
         setIsLoading(false);
         hasInitializedRef.current = true;
-
-        if (onReady) {
-          onReady(applet);
-        }
+        emitReady(applet);
 
         fadeTimerRef.current = setTimeout(() => {
           setShowSkeleton(false);
@@ -120,9 +120,13 @@ const GeoGebraContainer = ({ onReady, height = 600, canvasMode = null }) => {
     return () => {
       isCancelled = true;
       cleanupTimers();
-      GeoGebraEngine.destroy();
     };
-  }, [canvasMode?.appName, containerWidth, onReady, resolvedHeight]);
+  }, [containerWidth, emitReady, resolvedHeight]);
+
+  useEffect(() => () => {
+    cleanupTimers();
+    GeoGebraEngine.destroy();
+  }, []);
 
   useEffect(() => {
     if (!isReady || !containerWidth) {
@@ -207,4 +211,4 @@ const GeoGebraContainer = ({ onReady, height = 600, canvasMode = null }) => {
   );
 };
 
-export default GeoGebraContainer;
+export default memo(GeoGebraContainer);

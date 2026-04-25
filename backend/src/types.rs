@@ -88,6 +88,78 @@ pub struct DrawingJobCreateRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptInsightsRequest {
+    pub prompt: Option<String>,
+    pub commands: Vec<String>,
+    pub locale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptInsightsResponse {
+    pub summary: String,
+    pub key_points: Vec<String>,
+    pub annotations: Vec<String>,
+    pub explanation_steps: Vec<String>,
+    pub object_dependencies: Vec<ObjectExplanationItem>,
+    pub teaching_script: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationJobRequest {
+    pub canvas_mode: String,
+    pub commands: Vec<String>,
+    pub goal: String,
+    pub locale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationSuggestion {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub related_objects: Vec<String>,
+    pub suggested_command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationJobResponse {
+    pub summary: String,
+    pub annotations: Vec<AnnotationSuggestion>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectExplanationRequest {
+    pub canvas_mode: String,
+    pub commands: Vec<String>,
+    pub focus_objects: Vec<String>,
+    pub locale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectExplanationItem {
+    pub name: String,
+    pub kind: String,
+    pub depends_on: Vec<String>,
+    pub reason: String,
+    pub source_command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectExplanationResponse {
+    pub summary: String,
+    pub objects: Vec<ObjectExplanationItem>,
+    pub teaching_script: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ShareCreateRequest {
     pub title: String,
     #[serde(rename = "canvasMode")]
@@ -114,6 +186,121 @@ pub struct RegisterRequest {
 pub struct LoginRequest {
     pub account: String,
     pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectVersionSummary {
+    pub changed_lines: u32,
+    pub added_lines: u32,
+    pub removed_lines: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCreateRequest {
+    pub project_id: Option<String>,
+    pub title: String,
+    pub folder: String,
+    pub tags: Vec<String>,
+    pub is_favorite: bool,
+    pub canvas_mode: String,
+    pub code: String,
+    pub last_opened_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectUpdateRequest {
+    pub title: Option<String>,
+    pub folder: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub is_favorite: Option<bool>,
+    pub canvas_mode: Option<String>,
+    pub code: Option<String>,
+    pub latest_version_id: Option<String>,
+    pub last_opened_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectVersionCreateRequest {
+    pub version_id: Option<String>,
+    pub label: String,
+    pub trigger: String,
+    pub canvas_mode: String,
+    pub code: String,
+    pub summary: Option<ProjectVersionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRecord {
+    pub project_id: String,
+    pub owner_workspace_key: String,
+    pub title: String,
+    pub folder: String,
+    pub tags: Vec<String>,
+    pub is_favorite: bool,
+    pub canvas_mode: String,
+    pub latest_code: String,
+    pub latest_version_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_opened_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectVersionRecord {
+    pub version_id: String,
+    pub project_id: String,
+    pub owner_workspace_key: String,
+    pub label: String,
+    pub trigger: String,
+    pub canvas_mode: String,
+    pub code: String,
+    pub summary: ProjectVersionSummary,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportJobCreateRequest {
+    pub project_id: Option<String>,
+    pub title: Option<String>,
+    pub canvas_mode: String,
+    pub commands: Vec<String>,
+    pub format: String,
+    pub options: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportJobStatus {
+    Queued,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportJobRecord {
+    pub export_job_id: String,
+    pub owner_workspace_key: String,
+    pub project_id: Option<String>,
+    pub title: String,
+    pub canvas_mode: String,
+    pub format: String,
+    pub status: ExportJobStatus,
+    pub content_type: String,
+    pub download_name: String,
+    pub asset_text: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

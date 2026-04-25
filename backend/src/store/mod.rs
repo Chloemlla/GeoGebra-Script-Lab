@@ -7,7 +7,8 @@ pub use mongo::MongoStore;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::types::{
-    AssetRecord, DrawingJobRecord, SessionRecord, ShareRecord, UploadedAsset, UserRecord,
+    AssetRecord, DrawingJobRecord, ExportJobRecord, ProjectRecord, ProjectVersionRecord,
+    SessionRecord, ShareRecord, UploadedAsset, UserRecord,
 };
 
 const MAX_IN_MEMORY_ASSET_PAYLOAD_BYTES: usize = 512 * 1024;
@@ -163,6 +164,161 @@ pub async fn find_share_by_slug(
     }
 
     Ok(None)
+}
+
+pub async fn find_project_record(
+    project_id: &str,
+    state: &AppState,
+) -> Result<Option<ProjectRecord>, AppError> {
+    if let Some(record) = state.store.read().await.projects.get(project_id).cloned() {
+        return Ok(Some(record));
+    }
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let record = mongo_store.find_project(project_id).await?;
+        if let Some(record) = record.clone() {
+            state
+                .store
+                .write()
+                .await
+                .projects
+                .insert(project_id.to_string(), record);
+        }
+        return Ok(record);
+    }
+
+    Ok(state.store.read().await.projects.get(project_id).cloned())
+}
+
+pub async fn list_projects_by_workspace(
+    workspace_key: &str,
+    state: &AppState,
+) -> Result<Vec<ProjectRecord>, AppError> {
+    let memory_items = state
+        .store
+        .read()
+        .await
+        .projects
+        .values()
+        .filter(|record| record.owner_workspace_key == workspace_key)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let mongo_items = mongo_store.find_projects_by_workspace(workspace_key).await?;
+        let mut store = state.store.write().await;
+        for record in &mongo_items {
+            store
+                .projects
+                .insert(record.project_id.clone(), record.clone());
+        }
+        return Ok(mongo_items);
+    }
+
+    Ok(memory_items)
+}
+
+pub async fn upsert_project_record(state: &AppState, record: &ProjectRecord) -> Result<(), AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.upsert_project(record).await?;
+    }
+
+    state
+        .store
+        .write()
+        .await
+        .projects
+        .insert(record.project_id.clone(), record.clone());
+
+    Ok(())
+}
+
+pub async fn find_project_versions_by_project(
+    project_id: &str,
+    state: &AppState,
+) -> Result<Vec<ProjectVersionRecord>, AppError> {
+    let memory_items = state
+        .store
+        .read()
+        .await
+        .project_versions
+        .values()
+        .filter(|record| record.project_id == project_id)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let mongo_items = mongo_store.find_project_versions(project_id).await?;
+        let mut store = state.store.write().await;
+        for record in &mongo_items {
+            store
+                .project_versions
+                .insert(record.version_id.clone(), record.clone());
+        }
+        return Ok(mongo_items);
+    }
+
+    Ok(memory_items)
+}
+
+pub async fn upsert_project_version_record(
+    state: &AppState,
+    record: &ProjectVersionRecord,
+) -> Result<(), AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.upsert_project_version(record).await?;
+    }
+
+    state
+        .store
+        .write()
+        .await
+        .project_versions
+        .insert(record.version_id.clone(), record.clone());
+
+    Ok(())
+}
+
+pub async fn find_export_job_record(
+    export_job_id: &str,
+    state: &AppState,
+) -> Result<Option<ExportJobRecord>, AppError> {
+    if let Some(record) = state.store.read().await.export_jobs.get(export_job_id).cloned() {
+        return Ok(Some(record));
+    }
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let record = mongo_store.find_export_job(export_job_id).await?;
+        if let Some(record) = record.clone() {
+            state
+                .store
+                .write()
+                .await
+                .export_jobs
+                .insert(export_job_id.to_string(), record);
+        }
+        return Ok(record);
+    }
+
+    Ok(state.store.read().await.export_jobs.get(export_job_id).cloned())
+}
+
+pub async fn upsert_export_job_record(
+    state: &AppState,
+    record: &ExportJobRecord,
+) -> Result<(), AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.upsert_export_job(record).await?;
+    }
+
+    state
+        .store
+        .write()
+        .await
+        .export_jobs
+        .insert(record.export_job_id.clone(), record.clone());
+
+    Ok(())
 }
 
 pub async fn find_user_by_id(
