@@ -10,7 +10,6 @@ use crate::error::AppError;
 use crate::frontend::FrontendAssets;
 use crate::metrics::MetricsRegistry;
 use crate::model::{ModelClient, ModelDrawingResponse};
-use crate::storage::AssetFileStore;
 use crate::store::{MemoryStore, MongoStore};
 use crate::types::{Diagnostics, DrawingJobCreateRequest, JobStatus};
 use crate::utils::fallback_commands;
@@ -21,7 +20,6 @@ pub struct AppState {
     pub store: Arc<RwLock<MemoryStore>>,
     pub model_client: Arc<ModelClient>,
     pub model_task_dispatcher: Arc<ModelTaskDispatcher>,
-    pub asset_file_store: Arc<AssetFileStore>,
     pub frontend_assets: Arc<FrontendAssets>,
     pub metrics: Arc<MetricsRegistry>,
     pub mongo_store: Option<Arc<MongoStore>>,
@@ -162,7 +160,6 @@ pub async fn build_state(config: AppConfig) -> Result<AppState, AppError> {
         config.model_name.clone(),
         config.api_key.clone(),
     )?);
-    let asset_file_store = Arc::new(AssetFileStore::new(config.asset_storage_dir.clone()).await?);
     let frontend_assets = Arc::new(FrontendAssets::load(config.frontend_dist_dir.as_deref()));
     let mongo_store = match &config.mongodb_uri {
         Some(uri) => Some(Arc::new(
@@ -183,7 +180,6 @@ pub async fn build_state(config: AppConfig) -> Result<AppState, AppError> {
         store,
         model_client,
         model_task_dispatcher,
-        asset_file_store,
         frontend_assets,
         metrics,
         mongo_store,

@@ -21,6 +21,8 @@
         name="description"
         content="GeoGebra 交互式绘图工作台，支持脚本编辑、实时画布、自由点同步回写与结果导出。"
     >
+    <link rel="preconnect" href="https://www.geogebra.org" crossorigin>
+    <link rel="dns-prefetch" href="https://www.geogebra.org">
     <title>GeoGebra 几何脚本工作台</title>
     <style>
         * {
@@ -47,6 +49,6 @@
     <div id="root"></div>
     <script type="module" src="/src/index.jsx"></script>
     <!-- GeoGebra 官方 API -->
-    <script src="https://www.geogebra.org/apps/deployggb.js"></script>
+    <script defer src="https://www.geogebra.org/apps/deployggb.js"></script>
 </body>
 </html>

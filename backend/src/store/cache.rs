@@ -16,5 +16,8 @@ pub struct MemoryStore {
     pub project_versions: HashMap<String, ProjectVersionRecord>,
     pub export_jobs: HashMap<String, ExportJobRecord>,
     pub users: HashMap<String, UserRecord>,
+    pub user_emails: HashMap<String, String>,
+    pub usernames: HashMap<String, String>,
     pub sessions: HashMap<String, SessionRecord>,
+    pub session_tokens: HashMap<String, String>,
 }

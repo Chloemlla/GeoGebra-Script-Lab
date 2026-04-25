@@ -121,7 +121,7 @@ const GeoGebraContainer = ({ onReady, height = 600, canvasMode = null }) => {
       isCancelled = true;
       cleanupTimers();
     };
-  }, [containerWidth, emitReady, resolvedHeight]);
+  }, [containerWidth]);
 
   useEffect(() => () => {
     cleanupTimers();

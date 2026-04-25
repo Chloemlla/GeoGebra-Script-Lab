@@ -512,7 +512,8 @@ const dataUrlToFile = async (dataUrl, filename) => {
 
 const App = () => {
   const storedStudioState = readStudioState();
-  const storedAuthSession = readStoredAuthSession();
+  const storedAuthSessionRef = useRef(readStoredAuthSession());
+  const storedAuthSession = storedAuthSessionRef.current;
   const storedCurrentProject =
     storedStudioState.projects.find((project) => project.id === storedStudioState.currentProjectId)
     ?? storedStudioState.projects[0]
@@ -625,8 +626,11 @@ const App = () => {
       : null
   );
   const hasLoadedInitialShareRef = useRef(false);
-  const selectedCanvasMode =
-    CANVAS_MODES.find((mode) => mode.id === selectedCanvasModeId) ?? CANVAS_MODES[0];
+  const deferredCode = useDeferredValue(code);
+  const selectedCanvasMode = useMemo(
+    () => CANVAS_MODES.find((mode) => mode.id === selectedCanvasModeId) ?? CANVAS_MODES[0],
+    [selectedCanvasModeId]
+  );
   const currentUser = authSession?.user ?? null;
   const isAuthenticated = authState.state === 'authenticated' && Boolean(authSession?.token && currentUser);
 
@@ -635,7 +639,10 @@ const App = () => {
   const editorHeight = isPhoneLayout ? 360 : isCompactLayout ? 460 : 660;
   const canvasHeight = isPhoneLayout ? 380 : isCompactLayout ? 520 : 660;
 
-  const populatedCodeLines = code.split('\n').filter((line) => line.trim().length > 0).length;
+  const populatedCodeLines = useMemo(
+    () => deferredCode.split('\n').filter((line) => line.trim().length > 0).length,
+    [deferredCode]
+  );
   const changedPointCount = canvasDrift.changedObjects.length;
   const recentRunStatus = isExecuting
     ? '正在执行脚本'
@@ -663,14 +670,19 @@ const App = () => {
           * 100
       )}%`
     : '未执行';
-  const currentProject =
-    savedProjects.find((project) => project.id === currentProjectId)
-    ?? null;
-  const recentProjects = buildRecentProjects(savedProjects);
-  const parameterControls = extractParameterControls(code);
-  const pointDiffs = buildPointCommandDiffs(
-    code,
-    GeoGebraEngine.exportFreePointsAsCode(canvasDrift.changedObjects)
+  const currentProject = useMemo(
+    () => savedProjects.find((project) => project.id === currentProjectId) ?? null,
+    [currentProjectId, savedProjects]
+  );
+  const recentProjects = useMemo(() => buildRecentProjects(savedProjects), [savedProjects]);
+  const parameterControls = useMemo(() => extractParameterControls(deferredCode), [deferredCode]);
+  const driftPointStates = useMemo(
+    () => GeoGebraEngine.exportFreePointsAsCode(canvasDrift.changedObjects),
+    [canvasDrift.changedObjects]
+  );
+  const pointDiffs = useMemo(
+    () => buildPointCommandDiffs(deferredCode, driftPointStates),
+    [deferredCode, driftPointStates]
   );
   const selectedStyleScopeNames =
     styleDraft.scope === 'selected'
@@ -709,7 +721,11 @@ const App = () => {
     : '';
   const canPublishShare = isAuthenticated && code.trim().length > 0 && !isExecuting && !isGeneratingScript;
 
-  const overviewMetrics = [
+  const normalizedProjectTags = useMemo(
+    () => formatTagsInput(parseTagsInput(projectDraft.tagsInput)) || '未设置标签',
+    [projectDraft.tagsInput]
+  );
+  const overviewMetrics = useMemo(() => ([
     {
       label: '脚本行数',
       value: `${populatedCodeLines}`,
@@ -732,28 +748,15 @@ const App = () => {
       value: canvasDrift.isDirty ? `${changedPointCount} 点待同步` : '代码与画布一致',
       caption: isCanvasLocked ? '当前锁定拖拽，避免误改图形。' : '当前允许自由拖拽探索。',
     },
-  ];
-
-  const workflowSteps = [
-    '在编辑器中输入或载入 GeoGebra 指令。',
-    '运行后在右侧实时查看几何图形与执行结果。',
-    '拖动自由点时，可一键把新坐标同步回代码。',
-  ];
-
-  const editorNotes = [
-    {
-      title: 'UTF-8 中文注释',
-      description: '编辑器与命令读取保持 UTF-8，中文注释和标题不会被误读。',
-    },
-    {
-      title: '运行前自动清理画布',
-      description: '每次执行都会先重置画布，减少旧对象残留导致的误判。',
-    },
-    {
-      title: '拖拽与代码双向协作',
-      description: '允许先拖拽验证想法，再把点位同步回脚本，形成闭环。',
-    },
-  ];
+  ]), [
+    canvasDrift.isDirty,
+    changedPointCount,
+    executionStats,
+    isCanvasLocked,
+    populatedCodeLines,
+    selectedCanvasMode.description,
+    selectedCanvasMode.label,
+  ]);
 
   const commitProjects = useCallback((nextProjects, nextProjectId) => {
     setSavedProjects(nextProjects);
@@ -1001,11 +1004,13 @@ const App = () => {
         ? new Date(snapshot.generatedAt).toLocaleString('zh-CN')
         : '刚刚';
 
-      setAdminDashboard(snapshot);
-      setAdminState({
-        state: 'ready',
-        message: `最近刷新：${generatedAt}`,
-        isRefreshing: false,
+      startTransition(() => {
+        setAdminDashboard(snapshot);
+        setAdminState({
+          state: 'ready',
+          message: `最近刷新：${generatedAt}`,
+          isRefreshing: false,
+        });
       });
     } catch (error) {
       setAdminState({
@@ -1148,6 +1153,12 @@ const App = () => {
   }, []);
 
   const handleGenerateFromBackend = useCallback(async () => {
+    if (!isAuthenticated) {
+      setAuthMode('login');
+      alert('请先登录后再调用后端生成能力');
+      return;
+    }
+
     const trimmedPrompt = generationPrompt.trim();
     if (!trimmedPrompt) {
       alert('请输入要发送给后端的生成提示词');
@@ -1207,6 +1218,7 @@ const App = () => {
         versionLabel: 'AI 生成脚本',
       });
     } catch (error) {
+      handleApiAuthFailure(error);
       setErrors([
         {
           message: error.message,
@@ -1223,11 +1235,19 @@ const App = () => {
     canvasDrift.isDirty,
     executePreparedCommands,
     generationPrompt,
+    handleApiAuthFailure,
+    isAuthenticated,
     referenceFile,
     selectedCanvasModeId,
   ]);
 
   const handlePublishShare = useCallback(async () => {
+    if (!isAuthenticated) {
+      setAuthMode('login');
+      alert('请先登录后再发布分享');
+      return;
+    }
+
     let commands = [];
 
     try {
@@ -1285,12 +1305,22 @@ const App = () => {
       setActiveShareSlug(share.slug);
       appendLog(`分享已发布：${localShareUrl}`, 'success');
     } catch (error) {
+      handleApiAuthFailure(error);
       appendLog(`分享发布失败：${error.message}`, 'error');
       alert(error.message);
     } finally {
       setIsPublishingShare(false);
     }
-  }, [appendLog, code, generationPrompt, latestJobResult, selectedCanvasMode.label, selectedCanvasModeId]);
+  }, [
+    appendLog,
+    code,
+    generationPrompt,
+    handleApiAuthFailure,
+    isAuthenticated,
+    latestJobResult,
+    selectedCanvasMode.label,
+    selectedCanvasModeId,
+  ]);
 
   const initializeDispatcher = useCallback(() => {
     if (dispatcherRef.current) {
@@ -1308,16 +1338,16 @@ const App = () => {
     });
 
     dispatcher.setOnComplete((report) => {
-      setLogs(report.logs);
-      setErrors(report.errors);
-
       const executionTime = Date.now() - startTimeRef.current;
-      setExecutionStats({
-        ...report,
-        executionTime,
-      });
-
       setIsExecuting(false);
+      startTransition(() => {
+        setLogs(report.logs);
+        setErrors(report.errors);
+        setExecutionStats({
+          ...report,
+          executionTime,
+        });
+      });
 
       if (canvasLockRef.current) {
         GeoGebraEngine.setInteractivePointsLocked(true);
@@ -2283,6 +2313,63 @@ const App = () => {
   }, []);
 
   useEffect(() => {
+    let isCancelled = false;
+
+    if (!storedAuthSession?.token) {
+      clearAuthToken();
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    setAuthToken(storedAuthSession.token);
+
+    const restoreAuthSession = async () => {
+      try {
+        const currentSession = await fetchCurrentUser();
+        if (isCancelled) {
+          return;
+        }
+
+        const nextSession = {
+          token: storedAuthSession.token,
+          tokenType: storedAuthSession.tokenType || 'Bearer',
+          expiresAt: currentSession.expiresAt || storedAuthSession.expiresAt || null,
+          user: currentSession.user || storedAuthSession.user,
+        };
+
+        setAuthSession(nextSession);
+        setAuthState({
+          state: 'authenticated',
+          message: `${nextSession.user?.displayName || nextSession.user?.username || '当前用户'} 已登录`,
+        });
+        writeStoredAuthSession(nextSession);
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+
+        clearAuthToken();
+        clearStoredAuthSession();
+        setAuthSession(null);
+        setAuthState({
+          state: 'guest',
+          message:
+            error?.status === 401
+              ? '登录会话已失效，请重新登录'
+              : `会话恢复失败：${error.message}`,
+        });
+      }
+    };
+
+    void restoreAuthSession();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [storedAuthSession]);
+
+  useEffect(() => {
     void refreshAdminDashboard();
   }, [refreshAdminDashboard]);
 
@@ -2474,12 +2561,27 @@ const App = () => {
 
             <div className="global-nav-meta">
               <span className="nav-pill">{selectedCanvasMode.label}</span>
+              <span className={`nav-pill nav-pill-${authTone}`}>{authStatusText}</span>
               <span className={`nav-pill nav-pill-${backendTone}`}>{backendStatusText}</span>
               <span className={`nav-pill nav-pill-${syncTone}`}>{syncStatusText}</span>
               <span className={`nav-pill nav-pill-${recentRunTone}`}>{recentRunStatus}</span>
             </div>
           </div>
         </div>
+
+        <AuthPanel
+          authState={authState}
+          authMode={authMode}
+          authForm={authForm}
+          isSubmitting={isSubmittingAuth}
+          currentUser={currentUser}
+          sessionExpiresAt={authSession?.expiresAt ?? null}
+          isAuthenticated={isAuthenticated}
+          onModeChange={setAuthMode}
+          onFieldChange={handleAuthFieldChange}
+          onSubmit={handleAuthSubmit}
+          onLogout={handleLogout}
+        />
 
         <section className="chapter chapter-dark">
           <header className="hero-panel">
@@ -2541,7 +2643,7 @@ const App = () => {
               <article className="hero-status-card hero-checklist-card">
                 <span className="card-kicker">推荐工作流</span>
                 <ul className="workflow-list">
-                  {workflowSteps.map((step) => (
+                  {WORKFLOW_STEPS.map((step) => (
                     <li key={step}>{step}</li>
                   ))}
                 </ul>
@@ -2692,7 +2794,7 @@ const App = () => {
                 <span className="workspace-head-label">当前项目</span>
                 <strong>{projectDraft.title.trim() || DEFAULT_PROJECT_TITLE}</strong>
                 <span>{projectDraft.folder.trim() || DEFAULT_PROJECT_FOLDER}</span>
-                <code>{formatTagsInput(parseTagsInput(projectDraft.tagsInput)) || '未设置标签'}</code>
+                <code>{normalizedProjectTags}</code>
               </div>
             </div>
           )}
@@ -2936,21 +3038,23 @@ const App = () => {
                   </article>
                 </div>
 
-                <BackendPanel
-                  backendStatus={backendStatus}
-                  prompt={generationPrompt}
-                  onPromptChange={setGenerationPrompt}
-                  selectedFile={referenceFile}
-                  onFileChange={handleReferenceFileChange}
-                  onGenerate={handleGenerateFromBackend}
-                  onPublish={handlePublishShare}
-                  latestJobResult={latestJobResult}
-                  latestShare={latestShare}
-                  activeShareSlug={activeShareSlug}
-                  canPublish={canPublishShare}
-                  isGenerating={isGeneratingScript}
-                  isPublishing={isPublishingShare}
-                />
+              <BackendPanel
+                backendStatus={backendStatus}
+                prompt={generationPrompt}
+                onPromptChange={setGenerationPrompt}
+                selectedFile={referenceFile}
+                onFileChange={handleReferenceFileChange}
+                onGenerate={handleGenerateFromBackend}
+                onPublish={handlePublishShare}
+                latestJobResult={latestJobResult}
+                latestShare={latestShare}
+                activeShareSlug={activeShareSlug}
+                isAuthenticated={isAuthenticated}
+                authUserLabel={authUserLabel}
+                canPublish={canPublishShare}
+                isGenerating={isGeneratingScript}
+                isPublishing={isPublishingShare}
+              />
 
                 <AdminConsole
                   backendStatus={backendStatus}
@@ -3112,7 +3216,7 @@ const App = () => {
                     </div>
 
                     <div className="editor-tip-grid compact">
-                      {editorNotes.map((note) => (
+                      {EDITOR_NOTES.map((note) => (
                         <article key={note.title} className="micro-card">
                           <strong>{note.title}</strong>
                           <p>{note.description}</p>
