@@ -122,7 +122,7 @@ impl MongoStore {
             .unwrap_or_else(|_| "application/octet-stream".to_string());
         let bytes = document
             .get_binary_generic("bytes")
-            .map(Bytes::copy_from_slice)
+            .map(|bytes| Bytes::copy_from_slice(bytes))
             .map_err(|err| AppError::Internal(format!("invalid asset payload bytes: {err}")))?;
 
         Ok(Some(UploadedAsset {
@@ -189,6 +189,19 @@ impl MongoStore {
             "find_projects_by_workspace",
             &self.projects,
             doc! { "ownerWorkspaceKey": workspace_key },
+            Some(doc! { "updatedAt": -1 }),
+        )
+        .await
+    }
+
+    pub async fn find_projects_by_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<ProjectRecord>, AppError> {
+        self.find_many_records(
+            "find_projects_by_user",
+            &self.projects,
+            doc! { "ownerUserId": user_id },
             Some(doc! { "updatedAt": -1 }),
         )
         .await
@@ -335,6 +348,13 @@ impl MongoStore {
             &self.projects,
             doc! { "ownerWorkspaceKey": 1, "updatedAt": -1 },
             "projects_workspace_updated",
+        )
+        .await?;
+        self.create_index(
+            "create_index_projects_user",
+            &self.projects,
+            doc! { "ownerUserId": 1, "updatedAt": -1 },
+            "projects_user_updated",
         )
         .await?;
         self.create_index(

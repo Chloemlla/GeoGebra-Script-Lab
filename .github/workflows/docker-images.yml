@@ -42,7 +42,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.USER_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract image metadata
         id: app-meta

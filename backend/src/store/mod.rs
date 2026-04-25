@@ -201,6 +201,34 @@ pub async fn list_projects_by_workspace(
     Ok(memory_items)
 }
 
+pub async fn list_projects_by_user(
+    user_id: &str,
+    state: &AppState,
+) -> Result<Vec<ProjectRecord>, AppError> {
+    let memory_items = state
+        .store
+        .read()
+        .await
+        .projects
+        .values()
+        .filter(|record| record.owner_user_id == user_id)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let mongo_items = mongo_store.find_projects_by_user(user_id).await?;
+        let mut store = state.store.write().await;
+        for record in &mongo_items {
+            store
+                .projects
+                .insert(record.project_id.clone(), record.clone());
+        }
+        return Ok(mongo_items);
+    }
+
+    Ok(memory_items)
+}
+
 pub async fn upsert_project_record(
     state: &AppState,
     record: &ProjectRecord,

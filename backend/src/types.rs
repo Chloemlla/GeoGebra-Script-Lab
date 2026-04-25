@@ -239,6 +239,9 @@ pub struct ProjectVersionCreateRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRecord {
     pub project_id: String,
+    #[serde(default)]
+    pub owner_user_id: String,
+    #[serde(default)]
     pub owner_workspace_key: String,
     pub title: String,
     pub folder: String,
@@ -258,6 +261,9 @@ pub struct ProjectRecord {
 pub struct ProjectVersionRecord {
     pub version_id: String,
     pub project_id: String,
+    #[serde(default)]
+    pub owner_user_id: String,
+    #[serde(default)]
     pub owner_workspace_key: String,
     pub label: String,
     pub trigger: String,
@@ -290,6 +296,9 @@ pub enum ExportJobStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ExportJobRecord {
     pub export_job_id: String,
+    #[serde(default)]
+    pub owner_user_id: String,
+    #[serde(default)]
     pub owner_workspace_key: String,
     pub project_id: Option<String>,
     pub title: String,

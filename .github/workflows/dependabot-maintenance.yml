@@ -31,17 +31,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.USER_PAT }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: latest
+          node-version: "20"
 
       - name: Run fix script
         run: node scripts/fix-dependabot-alerts.js
@@ -67,7 +62,7 @@ jobs:
 
       - name: Run selected maintenance action
         env:
-          GITHUB_TOKEN: ${{ secrets.USER_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEPENDABOT_ACTION: ${{ inputs.action }}
         run: |
@@ -81,8 +76,8 @@ jobs:
           const [owner, repo] = repository.split('/');
           const summaryFile = process.env.GITHUB_STEP_SUMMARY;
           const requiredChecks = new Set([
-            'Docker Build Verification',
-            'Docker Build Verification (pull_request)',
+            'Unified App Image',
+            'Build Docker Images',
           ]);
 
           function request(path, method = 'GET', body = null) {
@@ -160,7 +155,7 @@ jobs:
             );
 
             const successfulCheck = (checks.check_runs || []).some((run) => {
-              return requiredChecks.has(run.name) &&
+              return [...requiredChecks].some((required) => run.name === required || run.name.includes(required)) &&
                 run.status === 'completed' &&
                 run.conclusion === 'success';
             });

@@ -26,7 +26,7 @@ use crate::state::AppState;
 use crate::store::{
     cache_asset_payload, find_any_job_record, find_asset_payload, find_asset_record,
     find_export_job_record, find_job_record, find_project_record, find_project_versions_by_project,
-    find_share_by_slug, find_user_by_email, find_user_by_id, find_user_by_username,
+    find_share_by_slug, find_user_by_email, find_user_by_username, list_projects_by_user,
     list_projects_by_workspace, revoke_session_by_token, upsert_asset_record,
     upsert_export_job_record, upsert_job_record, upsert_project_record,
     upsert_project_version_record, upsert_session_record, upsert_share_record, upsert_user_record,
@@ -356,6 +356,7 @@ async fn list_projects(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
     let workspace_key = require_workspace_key(request.headers())?;
     let query = request.uri().query().unwrap_or_default();
     let params = url::form_urlencoded::parse(query.as_bytes())
@@ -366,7 +367,22 @@ async fn list_projects(
         .map(|value| value.eq_ignore_ascii_case("true"));
     let folder_filter = params.get("folder").cloned();
 
-    let mut projects = list_projects_by_workspace(&workspace_key, &state).await?;
+    let mut projects_by_id = list_projects_by_user(&auth.user.user_id, &state)
+        .await?
+        .into_iter()
+        .map(|project| (project.project_id.clone(), project))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    for mut project in list_projects_by_workspace(&workspace_key, &state).await? {
+        if project.owner_user_id.is_empty() {
+            project.owner_user_id = auth.user.user_id.clone();
+            upsert_project_record(&state, &project).await?;
+        }
+
+        projects_by_id.insert(project.project_id.clone(), project);
+    }
+
+    let mut projects = projects_by_id.into_values().collect::<Vec<_>>();
     projects.retain(|project| project.deleted_at.is_none());
 
     if let Some(expected_favorite) = favorite_filter {
@@ -396,6 +412,7 @@ async fn create_project(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
     let workspace_key = require_workspace_key(request.headers())?;
     let body = read_json(request).await?;
     let payload: ProjectCreateRequest = serde_json::from_value(body)
@@ -407,6 +424,7 @@ async fn create_project(
             .project_id
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| format!("proj_{}", short_id())),
+        owner_user_id: auth.user.user_id.clone(),
         owner_workspace_key: workspace_key,
         title: normalize_title(&payload.title),
         folder: normalize_folder(&payload.folder),
@@ -441,12 +459,20 @@ async fn get_project(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
     let workspace_key = require_workspace_key(request.headers())?;
     let project_id = path.trim_start_matches("/api/v1/projects/");
-    let project = find_project_record(project_id, &state)
+    let mut project = find_project_record(project_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_workspace_owner(&project.owner_workspace_key, &workspace_key, "project")?;
+    ensure_actor_owns_resource(
+        &project.owner_user_id,
+        &auth.user.user_id,
+        &project.owner_workspace_key,
+        &workspace_key,
+        "project",
+    )?;
+    claim_project_owner_if_needed(&mut project, &auth.user.user_id, &workspace_key, &state).await?;
 
     Ok(json_response(
         StatusCode::OK,
@@ -466,6 +492,7 @@ async fn update_project(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
     let workspace_key = require_workspace_key(request.headers())?;
     let project_id = path.trim_start_matches("/api/v1/projects/");
     let body = read_json(request).await?;
@@ -474,7 +501,14 @@ async fn update_project(
     let mut project = find_project_record(project_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_workspace_owner(&project.owner_workspace_key, &workspace_key, "project")?;
+    ensure_actor_owns_resource(
+        &project.owner_user_id,
+        &auth.user.user_id,
+        &project.owner_workspace_key,
+        &workspace_key,
+        "project",
+    )?;
+    claim_project_owner_if_needed(&mut project, &auth.user.user_id, &workspace_key, &state).await?;
 
     if let Some(title) = payload.title {
         project.title = normalize_title(&title);
@@ -522,12 +556,20 @@ async fn list_project_versions(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
     let workspace_key = require_workspace_key(request.headers())?;
     let project_id = extract_project_id_from_versions_path(&path)?;
-    let project = find_project_record(project_id, &state)
+    let mut project = find_project_record(project_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_workspace_owner(&project.owner_workspace_key, &workspace_key, "project")?;
+    ensure_actor_owns_resource(
+        &project.owner_user_id,
+        &auth.user.user_id,
+        &project.owner_workspace_key,
+        &workspace_key,
+        "project",
+    )?;
+    claim_project_owner_if_needed(&mut project, &auth.user.user_id, &workspace_key, &state).await?;
     let mut versions = find_project_versions_by_project(project_id, &state).await?;
     versions.sort_by(|left, right| right.created_at.cmp(&left.created_at));
 
@@ -549,6 +591,7 @@ async fn create_project_version(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
     let workspace_key = require_workspace_key(request.headers())?;
     let project_id = extract_project_id_from_versions_path(&path)?;
     let body = read_json(request).await?;
@@ -557,7 +600,14 @@ async fn create_project_version(
     let mut project = find_project_record(project_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_workspace_owner(&project.owner_workspace_key, &workspace_key, "project")?;
+    ensure_actor_owns_resource(
+        &project.owner_user_id,
+        &auth.user.user_id,
+        &project.owner_workspace_key,
+        &workspace_key,
+        "project",
+    )?;
+    claim_project_owner_if_needed(&mut project, &auth.user.user_id, &workspace_key, &state).await?;
 
     let version = ProjectVersionRecord {
         version_id: payload
@@ -565,6 +615,7 @@ async fn create_project_version(
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| format!("ver_{}", short_id())),
         project_id: project_id.to_string(),
+        owner_user_id: auth.user.user_id.clone(),
         owner_workspace_key: workspace_key.clone(),
         label: if payload.label.trim().is_empty() {
             "手动快照".to_string()
@@ -692,6 +743,7 @@ async fn create_export_job(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
     let workspace_key = require_workspace_key(request.headers())?;
     let body = read_json(request).await?;
     let payload: ExportJobCreateRequest = serde_json::from_value(body)
@@ -702,7 +754,7 @@ async fn create_export_job(
     }
 
     let now = Utc::now();
-    let export_job = build_export_job_record(&workspace_key, payload, now)?;
+    let export_job = build_export_job_record(&auth.user.user_id, &workspace_key, payload, now)?;
     upsert_export_job_record(&state, &export_job).await?;
 
     Ok(json_response(
@@ -723,16 +775,21 @@ async fn get_export_job(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
     let workspace_key = require_workspace_key(request.headers())?;
     let export_job_id = path.trim_start_matches("/api/v1/exports/");
-    let export_job = find_export_job_record(export_job_id, &state)
+    let mut export_job = find_export_job_record(export_job_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_workspace_owner(
+    ensure_actor_owns_resource(
+        &export_job.owner_user_id,
+        &auth.user.user_id,
         &export_job.owner_workspace_key,
         &workspace_key,
         "export job",
     )?;
+    claim_export_job_owner_if_needed(&mut export_job, &auth.user.user_id, &workspace_key, &state)
+        .await?;
 
     Ok(json_response(
         StatusCode::OK,
@@ -752,18 +809,23 @@ async fn download_export_job(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
     let workspace_key = require_workspace_key(request.headers())?;
     let export_job_id = path
         .trim_start_matches("/api/v1/exports/")
         .trim_end_matches("/download");
-    let export_job = find_export_job_record(export_job_id, &state)
+    let mut export_job = find_export_job_record(export_job_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_workspace_owner(
+    ensure_actor_owns_resource(
+        &export_job.owner_user_id,
+        &auth.user.user_id,
         &export_job.owner_workspace_key,
         &workspace_key,
         "export job",
     )?;
+    claim_export_job_owner_if_needed(&mut export_job, &auth.user.user_id, &workspace_key, &state)
+        .await?;
 
     let mut response = bytes_response(
         StatusCode::OK,

@@ -7,7 +7,9 @@ use rand_core::OsRng;
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::store::{find_session_by_token, find_user_by_id, revoke_session_by_token};
+use crate::store::{
+    find_session_by_token, find_user_by_id, revoke_session_by_token, upsert_session_record,
+};
 use crate::types::{
     AuthContext, AuthSessionResponse, CurrentSessionResponse, SessionRecord, UserProfile,
     UserRecord,
@@ -156,7 +158,7 @@ pub async fn require_auth(headers: &HeaderMap, state: &AppState) -> Result<AuthC
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::Unauthorized("missing bearer token".to_string()))?;
 
-    let session = find_session_by_token(token, state)
+    let mut session = find_session_by_token(token, state)
         .await?
         .ok_or_else(|| AppError::Unauthorized("session not found".to_string()))?;
 
@@ -168,6 +170,9 @@ pub async fn require_auth(headers: &HeaderMap, state: &AppState) -> Result<AuthC
     let user = find_user_by_id(&session.user_id, state)
         .await?
         .ok_or_else(|| AppError::Unauthorized("session user not found".to_string()))?;
+
+    session.last_seen_at = Utc::now();
+    let _ = upsert_session_record(state, &session).await;
 
     Ok(AuthContext { user, session })
 }

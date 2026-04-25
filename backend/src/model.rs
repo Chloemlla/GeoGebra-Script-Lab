@@ -38,7 +38,6 @@ impl ModelClient {
                 .pool_idle_timeout(Duration::from_secs(90))
                 .pool_max_idle_per_host(16)
                 .tcp_keepalive(Duration::from_secs(30))
-                .http2_adaptive_window(true)
                 .build()
                 .map_err(|err| {
                     AppError::Internal(format!("unable to build model client: {err}"))
