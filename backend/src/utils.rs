@@ -1,9 +1,4 @@
-use mongodb::bson::Document;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
 use uuid::Uuid;
-
-use crate::error::AppError;
 
 pub fn fallback_commands() -> Vec<String> {
     vec![
@@ -14,20 +9,6 @@ pub fn fallback_commands() -> Vec<String> {
         "M = Midpoint(B, C)".to_string(),
         "median = Segment(A, M)".to_string(),
     ]
-}
-
-pub fn serialize_payload<T: Serialize>(value: &T) -> Result<String, AppError> {
-    serde_json::to_string(value)
-        .map_err(|err| AppError::Internal(format!("unable to serialize document payload: {err}")))
-}
-
-pub fn deserialize_payload<T: DeserializeOwned>(document: Document) -> Result<T, AppError> {
-    let payload = document
-        .get_str("payload")
-        .map_err(|err| AppError::Internal(format!("missing MongoDB payload field: {err}")))?;
-
-    serde_json::from_str(payload)
-        .map_err(|err| AppError::Internal(format!("unable to deserialize document payload: {err}")))
 }
 
 pub fn request_id() -> String {

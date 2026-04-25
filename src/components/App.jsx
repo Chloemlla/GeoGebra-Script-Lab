@@ -689,6 +689,7 @@ const App = () => {
   const driftBaselineCodeRef = useRef(null);
   const lecturePlayTokenRef = useRef(0);
   const hasInitializedWorkspaceRef = useRef(false);
+  const hasHydratedCloudProjectsRef = useRef(false);
   const versionDraftStateRef = useRef(null);
   const initialShareSlugRef = useRef(
     typeof window !== 'undefined'
@@ -958,7 +959,6 @@ const App = () => {
             trigger: version.trigger,
             canvasMode: version.canvasModeId,
             code: version.code,
-            summary: version.summary,
           });
 
           nextProject = attachVersionToProject(nextProject, hydrateVersionFromApi(remoteVersion));
@@ -1252,7 +1252,12 @@ const App = () => {
       refreshCanvasObjects();
 
       if (versionLabel) {
-        saveProjectRecord({
+        const nextProject = saveProjectRecord({
+          versionLabel,
+          trigger: 'execution',
+        });
+        void syncProjectToCloud({
+          project: nextProject,
           versionLabel,
           trigger: 'execution',
         });
@@ -1260,7 +1265,14 @@ const App = () => {
 
       return true;
     },
-    [appendLog, clearCanvasDrift, isCompactLayout, refreshCanvasObjects, saveProjectRecord]
+    [
+      appendLog,
+      clearCanvasDrift,
+      isCompactLayout,
+      refreshCanvasObjects,
+      saveProjectRecord,
+      syncProjectToCloud,
+    ]
   );
 
   const loadSharedCanvas = useCallback(
@@ -1893,8 +1905,13 @@ const App = () => {
       markOpened: true,
     });
     resetVersionBrowsing();
+    void syncProjectToCloud({
+      project,
+      versionLabel: '手动保存',
+      trigger: 'manual',
+    });
     appendLog(`项目已保存：${project.title}`, 'success');
-  }, [appendLog, resetVersionBrowsing, saveProjectRecord]);
+  }, [appendLog, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
 
   const handleSaveSnapshot = useCallback(() => {
     const project = saveProjectRecord({
@@ -1902,8 +1919,13 @@ const App = () => {
       trigger: 'snapshot',
     });
     resetVersionBrowsing();
+    void syncProjectToCloud({
+      project,
+      versionLabel: '手动快照',
+      trigger: 'snapshot',
+    });
     appendLog(`已为 ${project.title} 创建快照`, 'info');
-  }, [appendLog, resetVersionBrowsing, saveProjectRecord]);
+  }, [appendLog, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
 
   const applyVersionState = useCallback(
     (version, cursor) => {
@@ -2096,6 +2118,22 @@ const App = () => {
       versionLabel: '同步自由点',
       trigger: 'canvas_sync',
     });
+    void syncProjectToCloud({
+      project: {
+        ...(savedProjects.find((project) => project.id === currentProjectId) ?? createProjectRecord()),
+        id: currentProjectId,
+        title: projectDraft.title.trim() || DEFAULT_PROJECT_TITLE,
+        folder: projectDraft.folder.trim() || DEFAULT_PROJECT_FOLDER,
+        tags: parseTagsInput(projectDraft.tagsInput),
+        isFavorite: projectDraft.isFavorite,
+        canvasModeId: selectedCanvasModeId,
+        code: nextCode,
+        updatedAt: new Date().toISOString(),
+        lastOpenedAt: new Date().toISOString(),
+      },
+      versionLabel: '同步自由点',
+      trigger: 'canvas_sync',
+    });
     setActiveTab('code');
     appendLog(
       `已同步自由点：${pointStates.map((state) => state.name).join(', ')}`,
@@ -2106,9 +2144,17 @@ const App = () => {
     code,
     driftHasConflict,
     resetVersionBrowsing,
+    savedProjects,
     saveProjectRecord,
+    selectedCanvasModeId,
     selectedDriftNames,
     appendLog,
+    currentProjectId,
+    projectDraft.folder,
+    projectDraft.isFavorite,
+    projectDraft.tagsInput,
+    projectDraft.title,
+    syncProjectToCloud,
   ]);
 
   const handleDiscardCanvasDrift = useCallback(() => {
@@ -2395,6 +2441,80 @@ const App = () => {
   }, [code, commitProjects, selectedCanvasModeId, storedStudioState.projects, storedStudioState.currentProjectId]);
 
   useEffect(() => {
+    let isCancelled = false;
+
+    const hydrateProjectsFromCloud = async () => {
+      setCloudSyncState((prev) => ({
+        ...prev,
+        state: 'syncing',
+        message: '正在拉取云端项目空间',
+      }));
+
+      try {
+        const remoteProjects = await listProjects();
+        if (isCancelled) {
+          return;
+        }
+
+        const localMap = new Map(savedProjects.map((project) => [project.id, project]));
+        const mergedProjects = [...savedProjects];
+
+        remoteProjects.forEach((remoteProject) => {
+          const localProject = localMap.get(remoteProject.projectId) ?? null;
+          const hydrated = hydrateProjectFromApi(remoteProject, localProject);
+          const shouldReplace =
+            !localProject
+            || new Date(remoteProject.updatedAt).getTime() >= new Date(localProject.updatedAt || 0).getTime();
+
+          if (!localProject) {
+            mergedProjects.push(hydrated);
+          } else if (shouldReplace) {
+            const index = mergedProjects.findIndex((project) => project.id === hydrated.id);
+            if (index >= 0) {
+              mergedProjects[index] = {
+                ...mergedProjects[index],
+                ...hydrated,
+              };
+            }
+          }
+        });
+
+        const nextProjects = mergedProjects
+          .reduce((acc, project) => upsertProject(acc, project), []);
+        const nextCurrentProjectId = currentProjectId ?? nextProjects[0]?.id ?? null;
+        commitProjects(nextProjects, nextCurrentProjectId);
+
+        if (nextCurrentProjectId) {
+          void hydrateProjectVersionsFromCloud(nextCurrentProjectId);
+        }
+
+        setCloudSyncState((prev) => ({
+          ...prev,
+          state: 'synced',
+          message: `云端项目空间已同步 ${remoteProjects.length} 个项目`,
+          lastSyncedAt: new Date().toISOString(),
+        }));
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+
+        setCloudSyncState((prev) => ({
+          ...prev,
+          state: 'error',
+          message: error.message,
+        }));
+      }
+    };
+
+    void hydrateProjectsFromCloud();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [commitProjects, currentProjectId, hydrateProjectVersionsFromCloud, savedProjects]);
+
+  useEffect(() => {
     if (!hasInitializedWorkspaceRef.current) {
       return undefined;
     }
@@ -2404,7 +2524,10 @@ const App = () => {
     }
 
     const timer = window.setTimeout(() => {
-      saveProjectRecord();
+      const project = saveProjectRecord();
+      void syncProjectToCloud({
+        project,
+      });
     }, 800);
 
     return () => window.clearTimeout(timer);
@@ -2416,6 +2539,7 @@ const App = () => {
     projectDraft.title,
     saveProjectRecord,
     selectedCanvasModeId,
+    syncProjectToCloud,
     versionCursor,
   ]);
 
