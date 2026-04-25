@@ -21,6 +21,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         state.config.model_worker_concurrency.max(1),
         state.config.model_job_queue_capacity.max(1)
     );
+    println!(
+        "asset file storage is enabled at {}",
+        state.asset_file_store.root().display()
+    );
     if state.frontend_assets.files.is_empty() {
         println!("frontend asset hosting is disabled");
     } else {
@@ -40,6 +44,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     loop {
         let (stream, _) = listener.accept().await?;
+        if let Err(error) = stream.set_nodelay(true) {
+            eprintln!("unable to enable TCP_NODELAY: {error}");
+        }
         let state = state.clone();
 
         tokio::spawn(async move {

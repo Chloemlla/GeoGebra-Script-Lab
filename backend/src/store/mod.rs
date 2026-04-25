@@ -52,24 +52,9 @@ pub async fn find_asset_payload(
         return Ok(Some(payload));
     }
 
-    if let Some(record) = find_asset_record(asset_id, state).await? {
-        if let Some(bytes) = state.asset_file_store.load(asset_id).await? {
-            let payload = UploadedAsset {
-                content_type: record.mime_type,
-                bytes,
-            };
-            cache_asset_payload(state, asset_id, payload.clone()).await;
-            return Ok(Some(payload));
-        }
-    }
-
     if let Some(mongo_store) = &state.mongo_store {
         let payload = mongo_store.find_asset_payload(asset_id).await?;
         if let Some(payload) = payload.clone() {
-            state
-                .asset_file_store
-                .save(asset_id, &payload.bytes)
-                .await?;
             cache_asset_payload(state, asset_id, payload.clone()).await;
         }
         return Ok(payload);
@@ -154,11 +139,7 @@ pub async fn find_share_by_slug(
     if let Some(mongo_store) = &state.mongo_store {
         let record = mongo_store.find_share_by_slug(slug).await?;
         if let Some(record) = record.clone() {
-            let mut store = state.store.write().await;
-            store
-                .share_slugs
-                .insert(record.slug.clone(), record.share_id.clone());
-            store.shares.insert(record.share_id.clone(), record.clone());
+            cache_share_record(state, &record).await;
         }
         return Ok(record);
     }
@@ -218,7 +199,10 @@ pub async fn list_projects_by_workspace(
     Ok(memory_items)
 }
 
-pub async fn upsert_project_record(state: &AppState, record: &ProjectRecord) -> Result<(), AppError> {
+pub async fn upsert_project_record(
+    state: &AppState,
+    record: &ProjectRecord,
+) -> Result<(), AppError> {
     if let Some(mongo_store) = &state.mongo_store {
         mongo_store.upsert_project(record).await?;
     }
@@ -283,7 +267,14 @@ pub async fn find_export_job_record(
     export_job_id: &str,
     state: &AppState,
 ) -> Result<Option<ExportJobRecord>, AppError> {
-    if let Some(record) = state.store.read().await.export_jobs.get(export_job_id).cloned() {
+    if let Some(record) = state
+        .store
+        .read()
+        .await
+        .export_jobs
+        .get(export_job_id)
+        .cloned()
+    {
         return Ok(Some(record));
     }
 
@@ -332,12 +323,7 @@ pub async fn find_user_by_id(
     if let Some(mongo_store) = &state.mongo_store {
         let record = mongo_store.find_user_by_id(user_id).await?;
         if let Some(record) = record.clone() {
-            state
-                .store
-                .write()
-                .await
-                .users
-                .insert(user_id.to_string(), record);
+            cache_user_record(state, &record).await;
         }
         return Ok(record);
     }
@@ -349,6 +335,12 @@ pub async fn find_user_by_email(
     email: &str,
     state: &AppState,
 ) -> Result<Option<UserRecord>, AppError> {
+    if let Some(user_id) = state.store.read().await.user_emails.get(email).cloned() {
+        if let Some(record) = state.store.read().await.users.get(&user_id).cloned() {
+            return Ok(Some(record));
+        }
+    }
+
     if let Some(record) = state
         .store
         .read()
@@ -358,36 +350,31 @@ pub async fn find_user_by_email(
         .find(|record| record.email == email)
         .cloned()
     {
+        cache_user_record(state, &record).await;
         return Ok(Some(record));
     }
 
     if let Some(mongo_store) = &state.mongo_store {
         let record = mongo_store.find_user_by_email(email).await?;
         if let Some(record) = record.clone() {
-            state
-                .store
-                .write()
-                .await
-                .users
-                .insert(record.user_id.clone(), record.clone());
+            cache_user_record(state, &record).await;
         }
         return Ok(record);
     }
 
-    Ok(state
-        .store
-        .read()
-        .await
-        .users
-        .values()
-        .find(|record| record.email == email)
-        .cloned())
+    Ok(None)
 }
 
 pub async fn find_user_by_username(
     username: &str,
     state: &AppState,
 ) -> Result<Option<UserRecord>, AppError> {
+    if let Some(user_id) = state.store.read().await.usernames.get(username).cloned() {
+        if let Some(record) = state.store.read().await.users.get(&user_id).cloned() {
+            return Ok(Some(record));
+        }
+    }
+
     if let Some(record) = state
         .store
         .read()
@@ -397,36 +384,31 @@ pub async fn find_user_by_username(
         .find(|record| record.username == username)
         .cloned()
     {
+        cache_user_record(state, &record).await;
         return Ok(Some(record));
     }
 
     if let Some(mongo_store) = &state.mongo_store {
         let record = mongo_store.find_user_by_username(username).await?;
         if let Some(record) = record.clone() {
-            state
-                .store
-                .write()
-                .await
-                .users
-                .insert(record.user_id.clone(), record.clone());
+            cache_user_record(state, &record).await;
         }
         return Ok(record);
     }
 
-    Ok(state
-        .store
-        .read()
-        .await
-        .users
-        .values()
-        .find(|record| record.username == username)
-        .cloned())
+    Ok(None)
 }
 
 pub async fn find_session_by_token(
     token: &str,
     state: &AppState,
 ) -> Result<Option<SessionRecord>, AppError> {
+    if let Some(session_id) = state.store.read().await.session_tokens.get(token).cloned() {
+        if let Some(record) = state.store.read().await.sessions.get(&session_id).cloned() {
+            return Ok(Some(record));
+        }
+    }
+
     if let Some(record) = state
         .store
         .read()
@@ -436,57 +418,57 @@ pub async fn find_session_by_token(
         .find(|record| record.token == token)
         .cloned()
     {
+        cache_session_record(state, &record).await;
         return Ok(Some(record));
     }
 
     if let Some(mongo_store) = &state.mongo_store {
         let record = mongo_store.find_session_by_token(token).await?;
         if let Some(record) = record.clone() {
-            state
-                .store
-                .write()
-                .await
-                .sessions
-                .insert(record.session_id.clone(), record.clone());
+            cache_session_record(state, &record).await;
         }
         return Ok(record);
     }
 
-    Ok(state
-        .store
-        .read()
-        .await
-        .sessions
-        .values()
-        .find(|record| record.token == token)
-        .cloned())
+    Ok(None)
 }
 
 pub async fn revoke_session_by_token(
     token: &str,
     state: &AppState,
 ) -> Result<Option<SessionRecord>, AppError> {
-    let mut removed = {
+    let removed = {
         let mut store = state.store.write().await;
-        let session_id = store
-            .sessions
-            .values()
-            .find(|record| record.token == token)
-            .map(|record| record.session_id.clone());
-        session_id.and_then(|session_id| store.sessions.remove(&session_id))
+        let session_id = store.session_tokens.remove(token).or_else(|| {
+            store
+                .sessions
+                .values()
+                .find(|record| record.token == token)
+                .map(|record| record.session_id.clone())
+        });
+
+        session_id.and_then(|session_id| {
+            let record = store.sessions.remove(&session_id);
+            if let Some(record) = &record {
+                store.session_tokens.remove(&record.token);
+            }
+            record
+        })
     };
 
-    if let Some(mongo_store) = &state.mongo_store {
-        let deleted = mongo_store.delete_session_by_token(token).await?;
-        if removed.is_none() {
-            removed = deleted;
-        }
-    }
+    let mongo_removed = if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.delete_session_by_token(token).await?
+    } else {
+        None
+    };
 
-    Ok(removed)
+    Ok(removed.or(mongo_removed))
 }
 
-pub async fn upsert_asset_record(state: &AppState, record: &AssetRecord) -> Result<(), AppError> {
+pub async fn upsert_asset_record(
+    state: &AppState,
+    record: &AssetRecord,
+) -> Result<(), AppError> {
     if let Some(mongo_store) = &state.mongo_store {
         mongo_store.upsert_asset(record).await?;
     }
@@ -519,16 +501,41 @@ pub async fn upsert_job_record(
     Ok(())
 }
 
-pub async fn upsert_share_record(state: &AppState, record: &ShareRecord) -> Result<(), AppError> {
+pub async fn upsert_share_record(
+    state: &AppState,
+    record: &ShareRecord,
+) -> Result<(), AppError> {
     if let Some(mongo_store) = &state.mongo_store {
         mongo_store.upsert_share(record).await?;
     }
 
-    let mut store = state.store.write().await;
-    store
-        .share_slugs
-        .insert(record.slug.clone(), record.share_id.clone());
-    store.shares.insert(record.share_id.clone(), record.clone());
+    cache_share_record(state, record).await;
+
+    Ok(())
+}
+
+pub async fn upsert_user_record(
+    state: &AppState,
+    record: &UserRecord,
+) -> Result<(), AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.upsert_user(record).await?;
+    }
+
+    cache_user_record(state, record).await;
+
+    Ok(())
+}
+
+pub async fn upsert_session_record(
+    state: &AppState,
+    record: &SessionRecord,
+) -> Result<(), AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.upsert_session(record).await?;
+    }
+
+    cache_session_record(state, record).await;
 
     Ok(())
 }
@@ -540,4 +547,33 @@ pub async fn cache_asset_payload(state: &AppState, asset_id: &str, payload: Uplo
     } else {
         store.asset_payloads.remove(asset_id);
     }
+}
+
+async fn cache_share_record(state: &AppState, record: &ShareRecord) {
+    let mut store = state.store.write().await;
+    store
+        .share_slugs
+        .insert(record.slug.clone(), record.share_id.clone());
+    store.shares.insert(record.share_id.clone(), record.clone());
+}
+
+async fn cache_user_record(state: &AppState, record: &UserRecord) {
+    let mut store = state.store.write().await;
+    store
+        .user_emails
+        .insert(record.email.clone(), record.user_id.clone());
+    store
+        .usernames
+        .insert(record.username.clone(), record.user_id.clone());
+    store.users.insert(record.user_id.clone(), record.clone());
+}
+
+async fn cache_session_record(state: &AppState, record: &SessionRecord) {
+    let mut store = state.store.write().await;
+    store
+        .session_tokens
+        .insert(record.token.clone(), record.session_id.clone());
+    store
+        .sessions
+        .insert(record.session_id.clone(), record.clone());
 }

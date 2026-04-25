@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::time::Duration;
 use url::Url;
 
 use crate::error::AppError;
@@ -31,7 +32,15 @@ impl ModelClient {
             base_url,
             model_name,
             api_key,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(45))
+                .pool_idle_timeout(Duration::from_secs(90))
+                .pool_max_idle_per_host(16)
+                .tcp_keepalive(Duration::from_secs(30))
+                .http2_adaptive_window(true)
+                .build()
+                .map_err(|err| AppError::Internal(format!("unable to build model client: {err}")))?,
         })
     }
 

@@ -1,11 +1,11 @@
 use bytes::Bytes;
-use mongodb::bson::{doc, spec::BinarySubtype, Binary, Bson, Document};
+use mongodb::bson::{doc, from_document, spec::BinarySubtype, to_document, Binary, Bson, Document};
 use mongodb::options::IndexOptions;
 use mongodb::{Client as MongoClient, Collection, IndexModel};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 use crate::metrics::MetricsRegistry;
@@ -13,7 +13,6 @@ use crate::types::{
     AssetRecord, DrawingJobRecord, ExportJobRecord, ProjectRecord, ProjectVersionRecord,
     SessionRecord, ShareRecord, UploadedAsset, UserRecord,
 };
-use crate::utils::{deserialize_payload, serialize_payload};
 
 #[derive(Clone)]
 pub struct MongoStore {
@@ -64,18 +63,12 @@ impl MongoStore {
     }
 
     pub async fn upsert_asset(&self, record: &AssetRecord) -> Result<(), AppError> {
-        self.upsert_json(
-            "upsert_asset",
-            &self.assets,
-            "key",
-            &record.asset_id,
-            record,
-        )
-        .await
+        self.upsert_record("upsert_asset", &self.assets, &record.asset_id, record)
+            .await
     }
 
     pub async fn find_asset(&self, asset_id: &str) -> Result<Option<AssetRecord>, AppError> {
-        self.find_json("find_asset", &self.assets, doc! { "key": asset_id })
+        self.find_one_record("find_asset", &self.assets, doc! { "_id": asset_id }, None)
             .await
     }
 
@@ -85,8 +78,8 @@ impl MongoStore {
         content_type: &str,
         bytes: &Bytes,
     ) -> Result<(), AppError> {
-        let payload = doc! {
-            "key": asset_id,
+        let document = doc! {
+            "_id": asset_id,
             "contentType": content_type,
             "bytes": Bson::Binary(Binary {
                 subtype: BinarySubtype::Generic,
@@ -96,12 +89,13 @@ impl MongoStore {
 
         let started_at = Instant::now();
         self.asset_payloads
-            .replace_one(doc! { "key": asset_id }, payload)
+            .replace_one(doc! { "_id": asset_id }, document)
             .upsert(true)
             .await
             .map_err(|err| AppError::Internal(format!("unable to persist asset payload: {err}")))?;
         self.metrics
             .record_mongo_query("save_asset_payload", started_at.elapsed());
+
         Ok(())
     }
 
@@ -112,7 +106,7 @@ impl MongoStore {
         let started_at = Instant::now();
         let document = self
             .asset_payloads
-            .find_one(doc! { "key": asset_id })
+            .find_one(doc! { "_id": asset_id })
             .await
             .map_err(|err| AppError::Internal(format!("unable to load asset payload: {err}")))?;
         self.metrics
@@ -138,73 +132,64 @@ impl MongoStore {
     }
 
     pub async fn upsert_job(&self, record: &DrawingJobRecord) -> Result<(), AppError> {
-        self.upsert_json("upsert_job", &self.jobs, "key", &record.job_id, record)
+        self.upsert_record("upsert_job", &self.jobs, &record.job_id, record)
             .await
     }
 
     pub async fn find_job(&self, job_id: &str) -> Result<Option<DrawingJobRecord>, AppError> {
-        self.find_json("find_job", &self.jobs, doc! { "key": job_id })
+        self.find_one_record("find_job", &self.jobs, doc! { "_id": job_id }, None)
             .await
     }
 
     pub async fn find_any_job(&self) -> Result<Option<DrawingJobRecord>, AppError> {
-        self.find_json("find_any_job", &self.jobs, doc! {}).await
+        self.find_one_record(
+            "find_any_job",
+            &self.jobs,
+            doc! {},
+            Some(doc! { "updated_at": -1 }),
+        )
+        .await
     }
 
     pub async fn upsert_share(&self, record: &ShareRecord) -> Result<(), AppError> {
-        let payload = serialize_payload(record)?;
-        let document = doc! {
-            "key": &record.share_id,
-            "slug": &record.slug,
-            "payload": payload,
-        };
-
-        let started_at = Instant::now();
-        self.shares
-            .replace_one(doc! { "key": &record.share_id }, document)
-            .upsert(true)
+        self.upsert_record("upsert_share", &self.shares, &record.share_id, record)
             .await
-            .map_err(|err| AppError::Internal(format!("unable to persist share: {err}")))?;
-        self.metrics
-            .record_mongo_query("upsert_share", started_at.elapsed());
-        Ok(())
+    }
+
+    pub async fn find_share_by_slug(&self, slug: &str) -> Result<Option<ShareRecord>, AppError> {
+        self.find_one_record(
+            "find_share_by_slug",
+            &self.shares,
+            doc! { "slug": slug },
+            None,
+        )
+        .await
     }
 
     pub async fn upsert_project(&self, record: &ProjectRecord) -> Result<(), AppError> {
-        let payload = serialize_payload(record)?;
-        let document = doc! {
-            "key": &record.project_id,
-            "workspaceKey": &record.owner_workspace_key,
-            "updatedAt": record.updated_at.to_rfc3339(),
-            "isFavorite": record.is_favorite,
-            "folder": &record.folder,
-            "payload": payload,
-        };
-
-        let started_at = Instant::now();
-        self.projects
-            .replace_one(doc! { "key": &record.project_id }, document)
-            .upsert(true)
+        self.upsert_record("upsert_project", &self.projects, &record.project_id, record)
             .await
-            .map_err(|err| AppError::Internal(format!("unable to persist project: {err}")))?;
-        self.metrics
-            .record_mongo_query("upsert_project", started_at.elapsed());
-        Ok(())
     }
 
     pub async fn find_project(&self, project_id: &str) -> Result<Option<ProjectRecord>, AppError> {
-        self.find_json("find_project", &self.projects, doc! { "key": project_id })
-            .await
+        self.find_one_record(
+            "find_project",
+            &self.projects,
+            doc! { "_id": project_id },
+            None,
+        )
+        .await
     }
 
     pub async fn find_projects_by_workspace(
         &self,
         workspace_key: &str,
     ) -> Result<Vec<ProjectRecord>, AppError> {
-        self.find_many_json(
+        self.find_many_records(
             "find_projects_by_workspace",
             &self.projects,
-            doc! { "workspaceKey": workspace_key },
+            doc! { "ownerWorkspaceKey": workspace_key },
+            Some(doc! { "updatedAt": -1 }),
         )
         .await
     }
@@ -213,144 +198,98 @@ impl MongoStore {
         &self,
         record: &ProjectVersionRecord,
     ) -> Result<(), AppError> {
-        let payload = serialize_payload(record)?;
-        let document = doc! {
-            "key": &record.version_id,
-            "projectId": &record.project_id,
-            "workspaceKey": &record.owner_workspace_key,
-            "createdAt": record.created_at.to_rfc3339(),
-            "payload": payload,
-        };
-
-        let started_at = Instant::now();
-        self.project_versions
-            .replace_one(doc! { "key": &record.version_id }, document)
-            .upsert(true)
-            .await
-            .map_err(|err| AppError::Internal(format!("unable to persist project version: {err}")))?;
-        self.metrics
-            .record_mongo_query("upsert_project_version", started_at.elapsed());
-        Ok(())
+        self.upsert_record(
+            "upsert_project_version",
+            &self.project_versions,
+            &record.version_id,
+            record,
+        )
+        .await
     }
 
     pub async fn find_project_versions(
         &self,
         project_id: &str,
     ) -> Result<Vec<ProjectVersionRecord>, AppError> {
-        self.find_many_json(
+        self.find_many_records(
             "find_project_versions",
             &self.project_versions,
             doc! { "projectId": project_id },
+            Some(doc! { "createdAt": -1 }),
         )
         .await
     }
 
     pub async fn upsert_export_job(&self, record: &ExportJobRecord) -> Result<(), AppError> {
-        let payload = serialize_payload(record)?;
-        let document = doc! {
-            "key": &record.export_job_id,
-            "workspaceKey": &record.owner_workspace_key,
-            "projectId": record.project_id.clone(),
-            "updatedAt": record.updated_at.to_rfc3339(),
-            "format": &record.format,
-            "status": serde_json::to_string(&record.status).unwrap_or_else(|_| "\"failed\"".to_string()),
-            "payload": payload,
-        };
-
-        let started_at = Instant::now();
-        self.export_jobs
-            .replace_one(doc! { "key": &record.export_job_id }, document)
-            .upsert(true)
-            .await
-            .map_err(|err| AppError::Internal(format!("unable to persist export job: {err}")))?;
-        self.metrics
-            .record_mongo_query("upsert_export_job", started_at.elapsed());
-        Ok(())
+        self.upsert_record(
+            "upsert_export_job",
+            &self.export_jobs,
+            &record.export_job_id,
+            record,
+        )
+        .await
     }
 
     pub async fn find_export_job(
         &self,
         export_job_id: &str,
     ) -> Result<Option<ExportJobRecord>, AppError> {
-        self.find_json("find_export_job", &self.export_jobs, doc! { "key": export_job_id })
-            .await
-    }
-
-    pub async fn find_share_by_slug(&self, slug: &str) -> Result<Option<ShareRecord>, AppError> {
-        self.find_json("find_share_by_slug", &self.shares, doc! { "slug": slug })
-            .await
+        self.find_one_record(
+            "find_export_job",
+            &self.export_jobs,
+            doc! { "_id": export_job_id },
+            None,
+        )
+        .await
     }
 
     pub async fn upsert_user(&self, record: &UserRecord) -> Result<(), AppError> {
-        let payload = serialize_payload(record)?;
-        let document = doc! {
-            "key": &record.user_id,
-            "email": &record.email,
-            "username": &record.username,
-            "payload": payload,
-        };
-
-        let started_at = Instant::now();
-        self.users
-            .replace_one(doc! { "key": &record.user_id }, document)
-            .upsert(true)
+        self.upsert_record("upsert_user", &self.users, &record.user_id, record)
             .await
-            .map_err(|err| AppError::Internal(format!("unable to persist user: {err}")))?;
-        self.metrics
-            .record_mongo_query("upsert_user", started_at.elapsed());
-        Ok(())
     }
 
     pub async fn find_user_by_id(&self, user_id: &str) -> Result<Option<UserRecord>, AppError> {
-        self.find_json("find_user_by_id", &self.users, doc! { "key": user_id })
+        self.find_one_record("find_user_by_id", &self.users, doc! { "_id": user_id }, None)
             .await
     }
 
     pub async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, AppError> {
-        self.find_json("find_user_by_email", &self.users, doc! { "email": email })
-            .await
+        self.find_one_record(
+            "find_user_by_email",
+            &self.users,
+            doc! { "email": email },
+            None,
+        )
+        .await
     }
 
     pub async fn find_user_by_username(
         &self,
         username: &str,
     ) -> Result<Option<UserRecord>, AppError> {
-        self.find_json(
+        self.find_one_record(
             "find_user_by_username",
             &self.users,
             doc! { "username": username },
+            None,
         )
         .await
     }
 
     pub async fn upsert_session(&self, record: &SessionRecord) -> Result<(), AppError> {
-        let payload = serialize_payload(record)?;
-        let document = doc! {
-            "key": &record.session_id,
-            "token": &record.token,
-            "userId": &record.user_id,
-            "payload": payload,
-        };
-
-        let started_at = Instant::now();
-        self.sessions
-            .replace_one(doc! { "key": &record.session_id }, document)
-            .upsert(true)
+        self.upsert_record("upsert_session", &self.sessions, &record.session_id, record)
             .await
-            .map_err(|err| AppError::Internal(format!("unable to persist session: {err}")))?;
-        self.metrics
-            .record_mongo_query("upsert_session", started_at.elapsed());
-        Ok(())
     }
 
     pub async fn find_session_by_token(
         &self,
         token: &str,
     ) -> Result<Option<SessionRecord>, AppError> {
-        self.find_json(
+        self.find_one_record(
             "find_session_by_token",
             &self.sessions,
             doc! { "token": token },
+            None,
         )
         .await
     }
@@ -359,49 +298,24 @@ impl MongoStore {
         &self,
         token: &str,
     ) -> Result<Option<SessionRecord>, AppError> {
-        let existing = self.find_session_by_token(token).await?;
-        let Some(session) = existing.clone() else {
-            return Ok(None);
-        };
-
         let started_at = Instant::now();
-        self.sessions
-            .delete_one(doc! { "token": token })
+        let document = self
+            .sessions
+            .find_one_and_delete(doc! { "token": token })
             .await
             .map_err(|err| AppError::Internal(format!("unable to delete session: {err}")))?;
         self.metrics
             .record_mongo_query("delete_session_by_token", started_at.elapsed());
 
-        Ok(Some(session))
+        document.map(document_into_record).transpose()
     }
 
     async fn ensure_indexes(&self) -> Result<(), AppError> {
-        self.create_unique_index(
-            "create_index_assets_key",
-            &self.assets,
-            doc! { "key": 1 },
-            "assets_key_unique",
-        )
-        .await?;
-        self.create_unique_index(
-            "create_index_asset_payloads_key",
-            &self.asset_payloads,
-            doc! { "key": 1 },
-            "asset_payloads_key_unique",
-        )
-        .await?;
-        self.create_unique_index(
-            "create_index_jobs_key",
+        self.create_index(
+            "create_index_jobs_updated_at",
             &self.jobs,
-            doc! { "key": 1 },
-            "drawing_jobs_key_unique",
-        )
-        .await?;
-        self.create_unique_index(
-            "create_index_shares_key",
-            &self.shares,
-            doc! { "key": 1 },
-            "shares_key_unique",
+            doc! { "updated_at": -1 },
+            "drawing_jobs_updated_at_desc",
         )
         .await?;
         self.create_unique_index(
@@ -411,25 +325,11 @@ impl MongoStore {
             "shares_slug_unique",
         )
         .await?;
-        self.create_unique_index(
-            "create_index_projects_key",
-            &self.projects,
-            doc! { "key": 1 },
-            "projects_key_unique",
-        )
-        .await?;
         self.create_index(
             "create_index_projects_workspace",
             &self.projects,
-            doc! { "workspaceKey": 1, "updatedAt": -1 },
+            doc! { "ownerWorkspaceKey": 1, "updatedAt": -1 },
             "projects_workspace_updated",
-        )
-        .await?;
-        self.create_unique_index(
-            "create_index_project_versions_key",
-            &self.project_versions,
-            doc! { "key": 1 },
-            "project_versions_key_unique",
         )
         .await?;
         self.create_index(
@@ -437,20 +337,6 @@ impl MongoStore {
             &self.project_versions,
             doc! { "projectId": 1, "createdAt": -1 },
             "project_versions_project_created",
-        )
-        .await?;
-        self.create_unique_index(
-            "create_index_export_jobs_key",
-            &self.export_jobs,
-            doc! { "key": 1 },
-            "export_jobs_key_unique",
-        )
-        .await?;
-        self.create_unique_index(
-            "create_index_users_key",
-            &self.users,
-            doc! { "key": 1 },
-            "users_key_unique",
         )
         .await?;
         self.create_unique_index(
@@ -468,42 +354,38 @@ impl MongoStore {
         )
         .await?;
         self.create_unique_index(
-            "create_index_sessions_key",
-            &self.sessions,
-            doc! { "key": 1 },
-            "sessions_key_unique",
-        )
-        .await?;
-        self.create_unique_index(
             "create_index_sessions_token",
             &self.sessions,
             doc! { "token": 1 },
             "sessions_token_unique",
         )
         .await?;
+        self.create_ttl_index(
+            "create_index_sessions_expires_at_ttl",
+            &self.sessions,
+            doc! { "expiresAt": 1 },
+            "sessions_expires_at_ttl",
+            Duration::from_secs(0),
+        )
+        .await?;
 
         Ok(())
     }
 
-    async fn upsert_json<T: Serialize>(
+    async fn upsert_record<T: Serialize>(
         &self,
         operation_name: &str,
         collection: &Collection<Document>,
-        key_field: &str,
-        key: &str,
+        id: &str,
         value: &T,
     ) -> Result<(), AppError> {
-        let payload = serialize_payload(value)?;
-        let mut document = Document::new();
-        document.insert(key_field, key);
-        document.insert("payload", payload);
-
-        let mut filter = Document::new();
-        filter.insert(key_field, key);
+        let mut document = to_document(value)
+            .map_err(|err| AppError::Internal(format!("unable to build MongoDB document: {err}")))?;
+        document.insert("_id", id);
 
         let started_at = Instant::now();
         collection
-            .replace_one(filter, document)
+            .replace_one(doc! { "_id": id }, document)
             .upsert(true)
             .await
             .map_err(|err| {
@@ -511,35 +393,48 @@ impl MongoStore {
             })?;
         self.metrics
             .record_mongo_query(operation_name, started_at.elapsed());
+
         Ok(())
     }
 
-    async fn find_json<T: DeserializeOwned>(
+    async fn find_one_record<T: DeserializeOwned>(
         &self,
         operation_name: &str,
         collection: &Collection<Document>,
         filter: Document,
+        sort: Option<Document>,
     ) -> Result<Option<T>, AppError> {
         let started_at = Instant::now();
-        let document = collection
-            .find_one(filter)
+        let action = collection.find_one(filter);
+        let action = if let Some(sort) = sort {
+            action.sort(sort)
+        } else {
+            action
+        };
+        let document = action
             .await
             .map_err(|err| AppError::Internal(format!("unable to read MongoDB document: {err}")))?;
         self.metrics
             .record_mongo_query(operation_name, started_at.elapsed());
 
-        document.map(deserialize_payload).transpose()
+        document.map(document_into_record).transpose()
     }
 
-    async fn find_many_json<T: DeserializeOwned>(
+    async fn find_many_records<T: DeserializeOwned>(
         &self,
         operation_name: &str,
         collection: &Collection<Document>,
         filter: Document,
+        sort: Option<Document>,
     ) -> Result<Vec<T>, AppError> {
         let started_at = Instant::now();
-        let mut cursor = collection
-            .find(filter)
+        let action = collection.find(filter);
+        let action = if let Some(sort) = sort {
+            action.sort(sort)
+        } else {
+            action
+        };
+        let mut cursor = action
             .await
             .map_err(|err| AppError::Internal(format!("unable to read MongoDB documents: {err}")))?;
         let mut items = Vec::new();
@@ -547,16 +442,16 @@ impl MongoStore {
         while cursor
             .advance()
             .await
-            .map_err(|err| AppError::Internal(format!("unable to iterate MongoDB documents: {err}")))?
-        {
+            .map_err(|err| AppError::Internal(format!("unable to iterate MongoDB documents: {err}")))? {
             let document = cursor
                 .deserialize_current()
                 .map_err(|err| AppError::Internal(format!("invalid MongoDB document: {err}")))?;
-            items.push(deserialize_payload(document)?);
+            items.push(document_into_record(document)?);
         }
 
         self.metrics
             .record_mongo_query(operation_name, started_at.elapsed());
+
         Ok(items)
     }
 
@@ -583,6 +478,7 @@ impl MongoStore {
             .map_err(|err| AppError::Internal(format!("unable to create MongoDB index: {err}")))?;
         self.metrics
             .record_mongo_query(operation_name, started_at.elapsed());
+
         Ok(())
     }
 
@@ -608,6 +504,40 @@ impl MongoStore {
             .map_err(|err| AppError::Internal(format!("unable to create MongoDB index: {err}")))?;
         self.metrics
             .record_mongo_query(operation_name, started_at.elapsed());
+
         Ok(())
     }
+
+    async fn create_ttl_index(
+        &self,
+        operation_name: &str,
+        collection: &Collection<Document>,
+        keys: Document,
+        name: &str,
+        expire_after: Duration,
+    ) -> Result<(), AppError> {
+        let started_at = Instant::now();
+        let options = IndexOptions::builder()
+            .name(Some(name.to_string()))
+            .expire_after(Some(expire_after))
+            .build();
+        let model = IndexModel::builder()
+            .keys(keys)
+            .options(Some(options))
+            .build();
+
+        collection
+            .create_index(model)
+            .await
+            .map_err(|err| AppError::Internal(format!("unable to create MongoDB TTL index: {err}")))?;
+        self.metrics
+            .record_mongo_query(operation_name, started_at.elapsed());
+
+        Ok(())
+    }
+}
+
+fn document_into_record<T: DeserializeOwned>(document: Document) -> Result<T, AppError> {
+    from_document(document)
+        .map_err(|err| AppError::Internal(format!("unable to deserialize MongoDB document: {err}")))
 }

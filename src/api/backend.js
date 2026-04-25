@@ -7,6 +7,8 @@ const normalizeBaseUrl = (value) => {
 };
 
 const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+const WORKSPACE_STORAGE_KEY = 'geograba-workspace-key';
+const WORKSPACE_HEADER_NAME = 'X-Workspace-Key';
 let authToken = '';
 
 const buildUrl = (path) => {
@@ -21,6 +23,29 @@ const resolveUploadUrl = (value) => {
 
   return buildUrl(value);
 };
+
+const createWorkspaceKey = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `wk_${crypto.randomUUID().replace(/-/g, '')}`;
+  }
+
+  return `wk_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+};
+
+export function getWorkspaceKey() {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return 'wk_server_side_fallback';
+  }
+
+  const existing = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
+  if (existing) {
+    return existing;
+  }
+
+  const nextValue = createWorkspaceKey();
+  window.localStorage.setItem(WORKSPACE_STORAGE_KEY, nextValue);
+  return nextValue;
+}
 
 async function parseEnvelope(response) {
   const payload = await response.json().catch(() => null);
@@ -47,6 +72,7 @@ async function parseEnvelope(response) {
 async function request(path, options = {}) {
   const headers = {
     Accept: 'application/json',
+    [WORKSPACE_HEADER_NAME]: getWorkspaceKey(),
     ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     ...(options.body ? { 'Content-Type': 'application/json; charset=utf-8' } : {}),
     ...(options.headers || {}),
@@ -100,6 +126,7 @@ export async function uploadAsset({ uploadUrl, file, mimeType }) {
   const response = await fetch(resolveUploadUrl(uploadUrl), {
     method: 'PUT',
     headers: {
+      [WORKSPACE_HEADER_NAME]: getWorkspaceKey(),
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
       'Content-Type': mimeType || file.type || 'application/octet-stream',
     },
@@ -118,6 +145,20 @@ export async function createDrawingJob(payload) {
 
 export async function createScriptInsights(payload) {
   return request('/api/v1/ai/script-insights', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function createAnnotationJob(payload) {
+  return request('/api/v1/ai/annotation-jobs', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function createObjectExplanations(payload) {
+  return request('/api/v1/ai/object-explanations', {
     method: 'POST',
     body: payload,
   });
@@ -160,6 +201,62 @@ export async function createShare(payload) {
 
 export async function fetchShare(slug) {
   return request(`/api/v1/shares/${slug}`);
+}
+
+export async function listProjects(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      query.set(key, `${value}`);
+    }
+  });
+
+  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  return request(`/api/v1/projects${suffix}`);
+}
+
+export async function createProject(payload) {
+  return request('/api/v1/projects', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function fetchProject(projectId) {
+  return request(`/api/v1/projects/${projectId}`);
+}
+
+export async function updateProject(projectId, payload) {
+  return request(`/api/v1/projects/${projectId}`, {
+    method: 'PATCH',
+    body: payload,
+  });
+}
+
+export async function listProjectVersions(projectId) {
+  return request(`/api/v1/projects/${projectId}/versions`);
+}
+
+export async function createProjectVersion(projectId, payload) {
+  return request(`/api/v1/projects/${projectId}/versions`, {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function createExportJob(payload) {
+  return request('/api/v1/exports', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function fetchExportJob(exportJobId) {
+  return request(`/api/v1/exports/${exportJobId}`);
+}
+
+export function buildExportDownloadUrl(exportJobId) {
+  return buildUrl(`/api/v1/exports/${exportJobId}/download`);
 }
 
 export async function registerUser(payload) {

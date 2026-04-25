@@ -21,7 +21,7 @@ pub fn json_response<T: Serialize>(
 pub fn text_response(
     status: StatusCode,
     body: &str,
-    content_type: &'static str,
+    content_type: &str,
 ) -> Response<Full<Bytes>> {
     bytes_response(
         status,
@@ -33,15 +33,16 @@ pub fn text_response(
 pub fn bytes_response(
     status: StatusCode,
     body: Bytes,
-    content_type: &'static str,
+    content_type: &str,
 ) -> Response<Full<Bytes>> {
     let len = body.len();
     let mut response = Response::new(Full::new(body));
     *response.status_mut() = status;
-    response.headers_mut().insert(
-        http::header::CONTENT_TYPE,
-        HeaderValue::from_static(content_type),
-    );
+    if let Ok(value) = HeaderValue::from_str(content_type) {
+        response
+            .headers_mut()
+            .insert(http::header::CONTENT_TYPE, value);
+    }
     if let Ok(value) = HeaderValue::from_str(&len.to_string()) {
         response
             .headers_mut()
@@ -63,7 +64,7 @@ pub fn with_cors(mut response: Response<Full<Bytes>>) -> Response<Full<Bytes>> {
     );
     response.headers_mut().insert(
         http::header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET, POST, PUT, OPTIONS"),
+        HeaderValue::from_static("GET, POST, PUT, PATCH, OPTIONS"),
     );
     response.headers_mut().insert(
         http::header::ACCESS_CONTROL_ALLOW_HEADERS,

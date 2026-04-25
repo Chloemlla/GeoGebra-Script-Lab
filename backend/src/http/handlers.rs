@@ -764,7 +764,7 @@ async fn download_export_job(
     let mut response = bytes_response(
         StatusCode::OK,
         Bytes::copy_from_slice(export_job.asset_text.as_bytes()),
-        leaked_content_type(&export_job.content_type),
+        &export_job.content_type,
     );
     if let Ok(value) = HeaderValue::from_str(&format!(
         "attachment; filename=\"{}\"",
@@ -1346,15 +1346,15 @@ fn build_export_job_record(
     let commands_text = payload.commands.join("\n");
     let options = payload.options.unwrap_or_else(|| json!({}));
 
-    let (content_type, extension, asset_text) = match format.as_str() {
+    let (content_type, extension, asset_text): (String, String, String) = match format.as_str() {
         "svg" => (
             "image/svg+xml; charset=utf-8".to_string(),
-            "svg",
+            "svg".to_string(),
             build_svg_export(&title, &payload.canvas_mode, &payload.commands),
         ),
         "pdf" => (
             "text/plain; charset=utf-8".to_string(),
-            "pdf.txt",
+            "pdf.txt".to_string(),
             format!(
                 "PDF export spec\nTitle: {title}\nCanvas: {}\nOptions: {}\n\n{}",
                 payload.canvas_mode,
@@ -1364,7 +1364,7 @@ fn build_export_job_record(
         ),
         "gif" | "mp4" | "pptx" | "ggb" => (
             "application/json; charset=utf-8".to_string(),
-            &format!("{format}.json"),
+            format!("{format}.json"),
             serde_json::to_string_pretty(&json!({
                 "title": title,
                 "canvasMode": payload.canvas_mode,
@@ -1377,7 +1377,7 @@ fn build_export_job_record(
         ),
         _ => (
             "text/plain; charset=utf-8".to_string(),
-            "txt",
+            "txt".to_string(),
             commands_text,
         ),
     };
@@ -1433,10 +1433,6 @@ fn escape_svg(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
-}
-
-fn leaked_content_type(value: &str) -> &'static str {
-    Box::leak(value.to_string().into_boxed_str())
 }
 
 fn ensure_owner(owner_user_id: &str, current_user_id: &str, resource: &str) -> Result<(), AppError> {
