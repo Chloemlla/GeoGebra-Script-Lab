@@ -8,6 +8,7 @@ import GeoGebraEngine from '../engine/GeoGebraEngine';
 import Preprocessor from '../engine/Preprocessor';
 import Dispatcher from '../engine/Dispatcher';
 import './App.css';
+import { Analytics } from "@vercel/analytics/next"
 
 const DEFAULT_CODE = `// GeoGebra 交互式绘图系统
 // 在下方输入 GeoGebra 指令，每行一条
@@ -85,6 +86,17 @@ const PHONE_BREAKPOINT = 480;
 const DEFAULT_CANVAS_MODE_ID = 'geometry';
 const POWERSHELL_OUTPUT_COMMAND =
   '$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-Content -Encoding utf8 <path>';
+const OPEN_SOURCE_REPOSITORY_SEGMENTS = Object.freeze([
+  'github.com',
+  'Chloemlla',
+  'GeoGebra-Script-Lab',
+]);
+const OPEN_SOURCE_REPOSITORY_PATH = OPEN_SOURCE_REPOSITORY_SEGMENTS.join('/');
+const OPEN_SOURCE_REPOSITORY_URL = `https://${OPEN_SOURCE_REPOSITORY_PATH}`;
+const OPEN_SOURCE_LINK_LABEL = 'Open Source';
+const OPEN_SOURCE_LINK_REL = 'external noopener noreferrer';
+const OPEN_SOURCE_LINK_SIGNATURE = `github-origin:${OPEN_SOURCE_REPOSITORY_PATH}`;
+const OPEN_SOURCE_LINK_ARIA_LABEL = `查看开源仓库：${OPEN_SOURCE_REPOSITORY_PATH}`;
 
 const CANVAS_MODES = [
   {
@@ -203,6 +215,7 @@ const App = () => {
   const dirtyWarningLoggedRef = useRef(false);
   const isExecutingRef = useRef(false);
   const canvasLockRef = useRef(isCanvasLocked);
+  const openSourceLinkRef = useRef(null);
   const selectedCanvasMode =
     CANVAS_MODES.find((mode) => mode.id === selectedCanvasModeId) ?? CANVAS_MODES[0];
 
@@ -588,6 +601,62 @@ const App = () => {
   }, [isExecuting]);
 
   useEffect(() => {
+    const link = openSourceLinkRef.current;
+    if (!link) {
+      return undefined;
+    }
+
+    const repairLink = () => {
+      if (link.getAttribute('href') !== OPEN_SOURCE_REPOSITORY_URL) {
+        link.setAttribute('href', OPEN_SOURCE_REPOSITORY_URL);
+      }
+
+      if (link.getAttribute('rel') !== OPEN_SOURCE_LINK_REL) {
+        link.setAttribute('rel', OPEN_SOURCE_LINK_REL);
+      }
+
+      if (link.getAttribute('target') !== '_blank') {
+        link.setAttribute('target', '_blank');
+      }
+
+      if (link.getAttribute('referrerpolicy') !== 'no-referrer') {
+        link.setAttribute('referrerpolicy', 'no-referrer');
+      }
+
+      if (link.getAttribute('title') !== OPEN_SOURCE_REPOSITORY_URL) {
+        link.setAttribute('title', OPEN_SOURCE_REPOSITORY_URL);
+      }
+
+      if (link.getAttribute('data-source-signature') !== OPEN_SOURCE_LINK_SIGNATURE) {
+        link.setAttribute('data-source-signature', OPEN_SOURCE_LINK_SIGNATURE);
+      }
+
+      const labelNode = link.querySelector('[data-open-source-label]');
+      if (labelNode && labelNode.textContent !== OPEN_SOURCE_LINK_LABEL) {
+        labelNode.textContent = OPEN_SOURCE_LINK_LABEL;
+      }
+
+      const pathNode = link.querySelector('[data-open-source-path]');
+      if (pathNode && pathNode.textContent !== OPEN_SOURCE_REPOSITORY_PATH) {
+        pathNode.textContent = OPEN_SOURCE_REPOSITORY_PATH;
+      }
+    };
+
+    repairLink();
+
+    // Keep the visible GitHub origin pinned even if a runtime DOM mutation tries to rewrite it.
+    const observer = new MutationObserver(repairLink);
+    observer.observe(link, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     canvasLockRef.current = isCanvasLocked;
     GeoGebraEngine.setInteractivePointsLocked(isCanvasLocked);
   }, [isCanvasLocked]);
@@ -637,7 +706,7 @@ const App = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleRun]);
 
-  return (
+    return (    
     <div className="app-shell">
       <div className="app-container">
         <div className="global-nav">
@@ -651,9 +720,31 @@ const App = () => {
             </div>
           </div>
 
-          <div className="global-nav-meta">
-            <span className="nav-pill">{selectedCanvasMode.label}</span>
-            <span className={`nav-pill nav-pill-${recentRunTone}`}>{recentRunStatus}</span>
+          <div className="global-nav-actions">
+            <a
+              ref={openSourceLinkRef}
+              className="open-source-pill"
+              href={OPEN_SOURCE_REPOSITORY_URL}
+              target="_blank"
+              rel="external noopener noreferrer"
+              referrerPolicy="no-referrer"
+              title={OPEN_SOURCE_REPOSITORY_URL}
+              aria-label={OPEN_SOURCE_LINK_ARIA_LABEL}
+              data-source-signature={OPEN_SOURCE_LINK_SIGNATURE}
+            >
+              <span className="open-source-pill-label" data-open-source-label>
+                {OPEN_SOURCE_LINK_LABEL}
+              </span>
+              <strong className="open-source-pill-path" data-open-source-path>
+                {OPEN_SOURCE_REPOSITORY_PATH}
+              </strong>
+            </a>
+
+            <div className="global-nav-meta">
+              <span className="nav-pill">{selectedCanvasMode.label}</span>
+              <span className={`nav-pill nav-pill-${syncTone}`}>{syncStatusText}</span>
+              <span className={`nav-pill nav-pill-${recentRunTone}`}>{recentRunStatus}</span>
+            </div>
           </div>
         </div>
 
@@ -937,6 +1028,7 @@ const App = () => {
         <footer className="app-footer">
           <p>GeoGebra 交互式绘图系统 · React + Monaco Editor + GeoGebra Web API</p>
         </footer>
+        <Analytics />
       </div>
     </div>
   );

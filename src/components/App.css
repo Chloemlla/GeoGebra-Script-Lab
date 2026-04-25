@@ -25,6 +25,7 @@
 
 .global-nav-brand,
 .global-nav-copy,
+.global-nav-actions,
 .global-nav-meta {
   display: flex;
   align-items: center;
@@ -51,6 +52,13 @@
   border-radius: 50%;
 }
 
+.global-nav-actions {
+  margin-left: auto;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .global-nav-copy {
   flex-direction: column;
   align-items: flex-start;
@@ -72,6 +80,44 @@
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.open-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  max-width: min(100%, 420px);
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(41, 151, 255, 0.3);
+  background: linear-gradient(135deg, rgba(41, 151, 255, 0.28), rgba(255, 255, 255, 0.12));
+  color: #ffffff;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+  transition:
+    border-color 0.22s ease,
+    background-color 0.22s ease,
+    transform 0.22s ease;
+}
+
+.open-source-pill:hover {
+  transform: translateY(-1px);
+  border-color: rgba(122, 223, 150, 0.36);
+  background: linear-gradient(135deg, rgba(41, 151, 255, 0.38), rgba(255, 255, 255, 0.16));
+}
+
+.open-source-pill-label {
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.open-source-pill-path {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .nav-pill {
@@ -107,6 +153,12 @@
   background: rgba(255, 107, 107, 0.14);
   color: #ffb4b4;
   border-color: rgba(255, 180, 180, 0.22);
+}
+
+.nav-pill-warning {
+  background: rgba(255, 200, 87, 0.16);
+  color: #ffd37c;
+  border-color: rgba(255, 211, 124, 0.24);
 }
 
 .nav-pill-neutral,
@@ -788,6 +840,15 @@
     border-radius: 28px;
   }
 
+  .global-nav-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .open-source-pill {
+    max-width: 100%;
+  }
+
   .metric-grid,
   .starter-grid,
   .editor-tip-grid {
@@ -801,6 +862,7 @@
 
   .section-meta,
   .canvas-sync-actions,
+  .global-nav-actions,
   .global-nav-meta {
     justify-content: flex-start;
   }
