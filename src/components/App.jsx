@@ -2,11 +2,43 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import GeoGebraContainer from './GeoGebraContainer';
 import CodeEditor from './CodeEditor';
 import ControlPanel from './ControlPanel';
+import AdminConsole from './AdminConsole';
+import BackendPanel from './BackendPanel';
 import LogPanel from './LogPanel';
 import AppIcon from './AppIcon';
 import GeoGebraEngine from '../engine/GeoGebraEngine';
 import Preprocessor from '../engine/Preprocessor';
 import Dispatcher from '../engine/Dispatcher';
+import {
+  createDrawingJob,
+  createScriptInsights,
+  createShare,
+  fetchAdminDashboard,
+  fetchHealth,
+  fetchModelConfig,
+  fetchShare,
+  pollDrawingJob,
+  reserveUpload,
+  uploadAsset,
+} from '../api/backend';
+import {
+  appendInsightCommentsToCode,
+  attachVersionToProject,
+  buildPointCommandDiffs,
+  buildRecentProjects,
+  createProjectRecord,
+  createVersionRecord,
+  downloadTextFile,
+  extractParameterControls,
+  formatTagsInput,
+  mergeCanvasStateIntoCode,
+  parseTagsInput,
+  readStudioState,
+  replaceAssignmentValue,
+  summarizeCodeDiff,
+  upsertProject,
+  writeStudioState,
+} from '../utils/studio';
 import { Analytics } from '@vercel/analytics/react';
 import './App.css';
 
@@ -84,8 +116,29 @@ tip = Text("观察原图、平移图与旋转图", (-3, -1))`,
 const MOBILE_BREAKPOINT = 1024;
 const PHONE_BREAKPOINT = 480;
 const DEFAULT_CANVAS_MODE_ID = 'geometry';
-const POWERSHELL_OUTPUT_COMMAND =
-  '$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Invoke-RestMethod -Uri "$env:API_BASE/api/v1/..." -Method Get | ConvertTo-Json -Depth 10';
+const DEFAULT_GENERATION_PROMPT = '识别图中的几何关系并输出可执行的 GeoGebra commands';
+const DEFAULT_PROJECT_TITLE = '未命名项目';
+const DEFAULT_PROJECT_FOLDER = '个人空间';
+const SHARE_QUERY_KEY = 'share';
+const POWERSHELL_BOOTSTRAP = `$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+
+function Format-ApiJson {
+  param(
+    [Parameter(ValueFromPipeline)] $InputObject
+  )
+
+  process {
+    $InputObject | ConvertTo-Json -Depth 10
+  }
+}`;
+const withPowershellJsonOutput = (command) => `${POWERSHELL_BOOTSTRAP}
+
+${command} |
+  Format-ApiJson`;
+const POWERSHELL_OUTPUT_COMMAND = withPowershellJsonOutput(
+  'Invoke-RestMethod -Uri "$env:API_BASE/api/v1/..." -Method Get'
+);
 const OPEN_SOURCE_REPOSITORY_SEGMENTS = Object.freeze([
   'github.com',
   'Chloemlla',
@@ -224,7 +277,7 @@ const API_ENDPOINT_BLUEPRINT = [
     "expiresIn": 900
   }
 }`,
-    powershell: `$body = @{
+    powershell: withPowershellJsonOutput(`$body = @{
   filename = "triangle-sketch.png"
   mimeType = "image/png"
   size = 421993
@@ -232,7 +285,7 @@ const API_ENDPOINT_BLUEPRINT = [
   canvasMode = "geometry"
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "$env:API_BASE/api/v1/assets/uploads" -Method Post -ContentType "application/json; charset=utf-8" -Body $body | ConvertTo-Json -Depth 10`,
+Invoke-RestMethod -Uri "$env:API_BASE/api/v1/assets/uploads" -Method Post -ContentType "application/json; charset=utf-8" -Body $body`),
   },
   {
     id: 'drawing-job',
@@ -261,7 +314,7 @@ Invoke-RestMethod -Uri "$env:API_BASE/api/v1/assets/uploads" -Method Post -Conte
     "estimatedLatencyMs": 6000
   }
 }`,
-    powershell: `$body = @{
+    powershell: withPowershellJsonOutput(`$body = @{
   assetId = "asset_01JV7Q5F9CW4S8FBCV7S9F1A7M"
   prompt = "识别图中的三角形与中线，并输出可执行脚本"
   canvasMode = "geometry"
@@ -269,7 +322,7 @@ Invoke-RestMethod -Uri "$env:API_BASE/api/v1/assets/uploads" -Method Post -Conte
   locale = "zh-CN"
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs" -Method Post -ContentType "application/json; charset=utf-8" -Body $body | ConvertTo-Json -Depth 10`,
+Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs" -Method Post -ContentType "application/json; charset=utf-8" -Body $body`),
   },
   {
     id: 'drawing-job-status',
@@ -307,7 +360,9 @@ Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs" -Method Post -Cont
     }
   }
 }`,
-    powershell: `Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs/job_01JV7Q708K7W6FDH3Y4SEB4T5W" -Method Get | ConvertTo-Json -Depth 10`,
+    powershell: withPowershellJsonOutput(
+      'Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs/job_01JV7Q708K7W6FDH3Y4SEB4T5W" -Method Get'
+    ),
   },
   {
     id: 'share-canvas',
@@ -344,7 +399,7 @@ Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs" -Method Post -Cont
     "posterUrl": "https://cdn.example.com/shares/median-demo-8h2f/poster.png"
   }
 }`,
-    powershell: `$body = @{
+    powershell: withPowershellJsonOutput(`$body = @{
   title = "三角形中线示例"
   canvasMode = "geometry"
   commands = @(
@@ -360,11 +415,9 @@ Invoke-RestMethod -Uri "$env:API_BASE/api/v1/ai/drawing-jobs" -Method Post -Cont
   allowFork = $true
 } | ConvertTo-Json -Depth 10
 
-Invoke-RestMethod -Uri "$env:API_BASE/api/v1/shares" -Method Post -ContentType "application/json; charset=utf-8" -Body $body | ConvertTo-Json -Depth 10`,
+Invoke-RestMethod -Uri "$env:API_BASE/api/v1/shares" -Method Post -ContentType "application/json; charset=utf-8" -Body $body`),
   },
 ];
-
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const formatDuration = (duration) => {
   if (typeof duration !== 'number' || Number.isNaN(duration)) {
@@ -381,41 +434,41 @@ const formatDuration = (duration) => {
 
   return `${(duration / 1000).toFixed(1)} s`;
 };
-
-const mergeCanvasStateIntoCode = (sourceCode, pointStates) => {
-  if (pointStates.length === 0) {
-    return sourceCode;
+const buildSharePageUrl = (slug) => {
+  if (typeof window === 'undefined') {
+    return `?${SHARE_QUERY_KEY}=${encodeURIComponent(slug)}`;
   }
 
-  const remainingStates = new Map(pointStates.map((state) => [state.name, state.command]));
-  const updatedLines = sourceCode.split('\n').map((line) => {
-    for (const [name, command] of remainingStates) {
-      const pattern = new RegExp(
-        `^(\\s*)${escapeRegExp(name)}\\s*=\\s*\\(([^()]*)\\)\\s*(//.*)?$`
-      );
-      const match = line.match(pattern);
+  const url = new URL(window.location.href);
+  url.searchParams.set(SHARE_QUERY_KEY, slug);
+  return url.toString();
+};
 
-      if (match) {
-        remainingStates.delete(name);
-        return `${match[1]}${command}${match[3] ? ` ${match[3]}` : ''}`;
-      }
-    }
+const normalizeScriptText = (commands) => `${commands.join('\n')}\n`;
 
-    return line;
+const buildShareTitle = (value, fallback) => {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (trimmed.length === 0) {
+    return fallback;
+  }
+
+  return trimmed.length > 60 ? `${trimmed.slice(0, 60)}...` : trimmed;
+};
+
+const dataUrlToFile = async (dataUrl, filename) => {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  return new File([blob], filename, {
+    type: blob.type || 'image/png',
   });
-
-  if (remainingStates.size === 0) {
-    return updatedLines.join('\n');
-  }
-
-  const appendedLines = Array.from(remainingStates.values());
-  const baseCode = updatedLines.join('\n');
-  const separator = baseCode.trim().length > 0 ? '\n\n' : '';
-
-  return `${baseCode}${separator}// 从画布同步的自由点\n${appendedLines.join('\n')}`;
 };
 
 const App = () => {
+  const storedStudioState = readStudioState();
+  const storedCurrentProject =
+    storedStudioState.projects.find((project) => project.id === storedStudioState.currentProjectId)
+    ?? storedStudioState.projects[0]
+    ?? null;
   const [code, setCode] = useState(DEFAULT_CODE);
   const [logs, setLogs] = useState([]);
   const [errors, setErrors] = useState([]);
@@ -433,12 +486,75 @@ const App = () => {
   const [viewportWidth, setViewportWidth] = useState(
     () => (typeof window !== 'undefined' ? window.innerWidth : 1440)
   );
+  const [backendStatus, setBackendStatus] = useState({
+    state: 'checking',
+    message: '正在检测后端连接',
+    modelName: '',
+    providerBaseUrl: '',
+  });
+  const [adminDashboard, setAdminDashboard] = useState(null);
+  const [adminState, setAdminState] = useState({
+    state: 'loading',
+    message: '正在拉取超级后台快照',
+    isRefreshing: false,
+  });
+  const [isAdminAutoRefresh, setIsAdminAutoRefresh] = useState(true);
+  const [savedProjects, setSavedProjects] = useState(storedStudioState.projects);
+  const [currentProjectId, setCurrentProjectId] = useState(storedCurrentProject?.id ?? null);
+  const [projectDraft, setProjectDraft] = useState({
+    title: storedCurrentProject?.title ?? DEFAULT_PROJECT_TITLE,
+    folder: storedCurrentProject?.folder ?? DEFAULT_PROJECT_FOLDER,
+    tagsInput: formatTagsInput(storedCurrentProject?.tags ?? []),
+    isFavorite: Boolean(storedCurrentProject?.isFavorite),
+  });
+  const [selectedDriftNames, setSelectedDriftNames] = useState([]);
+  const [parameterValues, setParameterValues] = useState({});
+  const [availableObjectNames, setAvailableObjectNames] = useState([]);
+  const [selectedStyleNames, setSelectedStyleNames] = useState([]);
+  const [styleDraft, setStyleDraft] = useState({
+    color: '#0071e3',
+    lineThickness: 3,
+    pointSize: 5,
+    labelVisible: true,
+    showGrid: false,
+    showAxes: true,
+    scope: 'all',
+  });
+  const [lectureState, setLectureState] = useState({
+    commands: [],
+    currentStep: 0,
+    isPlaying: false,
+  });
+  const [presentationMode, setPresentationMode] = useState(false);
+  const [scriptInsights, setScriptInsights] = useState(null);
+  const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
+  const [versionComparison, setVersionComparison] = useState(null);
+  const [versionCursor, setVersionCursor] = useState(-1);
+  const [generationPrompt, setGenerationPrompt] = useState(DEFAULT_GENERATION_PROMPT);
+  const [referenceFile, setReferenceFile] = useState(null);
+  const [isGeneratingScript, setIsGeneratingScript] = useState(false);
+  const [isPublishingShare, setIsPublishingShare] = useState(false);
+  const [latestJobResult, setLatestJobResult] = useState(null);
+  const [latestShare, setLatestShare] = useState(null);
+  const [activeShareSlug, setActiveShareSlug] = useState(null);
   const dispatcherRef = useRef(null);
   const startTimeRef = useRef(null);
   const dirtyWarningLoggedRef = useRef(false);
   const isExecutingRef = useRef(false);
   const canvasLockRef = useRef(isCanvasLocked);
   const openSourceLinkRef = useRef(null);
+  const queuedScriptRef = useRef(null);
+  const workspaceShellRef = useRef(null);
+  const driftBaselineCodeRef = useRef(null);
+  const lecturePlayTokenRef = useRef(0);
+  const hasInitializedWorkspaceRef = useRef(false);
+  const versionDraftStateRef = useRef(null);
+  const initialShareSlugRef = useRef(
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get(SHARE_QUERY_KEY)
+      : null
+  );
+  const hasLoadedInitialShareRef = useRef(false);
   const selectedCanvasMode =
     CANVAS_MODES.find((mode) => mode.id === selectedCanvasModeId) ?? CANVAS_MODES[0];
 
@@ -475,6 +591,37 @@ const App = () => {
           * 100
       )}%`
     : '未执行';
+  const currentProject =
+    savedProjects.find((project) => project.id === currentProjectId)
+    ?? null;
+  const recentProjects = buildRecentProjects(savedProjects);
+  const parameterControls = extractParameterControls(code);
+  const pointDiffs = buildPointCommandDiffs(
+    code,
+    GeoGebraEngine.exportFreePointsAsCode(canvasDrift.changedObjects)
+  );
+  const selectedStyleScopeNames =
+    styleDraft.scope === 'selected'
+      ? selectedStyleNames
+      : availableObjectNames;
+  const driftHasConflict =
+    canvasDrift.isDirty
+    && driftBaselineCodeRef.current !== null
+    && driftBaselineCodeRef.current !== code;
+
+  const backendTone =
+    backendStatus.state === 'connected'
+      ? 'success'
+      : backendStatus.state === 'error'
+      ? 'danger'
+      : 'neutral';
+  const backendStatusText =
+    backendStatus.state === 'connected'
+      ? `API ready: ${backendStatus.modelName || 'model'}`
+      : backendStatus.state === 'error'
+      ? 'API unavailable'
+      : 'API checking';
+  const canPublishShare = code.trim().length > 0 && !isExecuting && !isGeneratingScript;
 
   const overviewMetrics = [
     {
@@ -522,13 +669,391 @@ const App = () => {
     },
   ];
 
+  const commitProjects = useCallback((nextProjects, nextProjectId) => {
+    setSavedProjects(nextProjects);
+    setCurrentProjectId(nextProjectId);
+    writeStudioState({
+      projects: nextProjects,
+      currentProjectId: nextProjectId,
+    });
+  }, []);
+
+  const refreshCanvasObjects = useCallback(() => {
+    setAvailableObjectNames(GeoGebraEngine.getAllObjectNames().sort((left, right) => left.localeCompare(right, 'zh-CN')));
+  }, []);
+
+  const saveProjectRecord = useCallback(
+    ({ versionLabel = null, trigger = 'autosave', markOpened = false } = {}) => {
+      const now = new Date().toISOString();
+      const existingProject =
+        savedProjects.find((project) => project.id === currentProjectId)
+        ?? null;
+      let nextProject = {
+        ...(existingProject
+          ?? createProjectRecord({
+            id: currentProjectId ?? undefined,
+            createdAt: now,
+          })),
+        title: projectDraft.title.trim() || DEFAULT_PROJECT_TITLE,
+        folder: projectDraft.folder.trim() || DEFAULT_PROJECT_FOLDER,
+        tags: parseTagsInput(projectDraft.tagsInput),
+        isFavorite: projectDraft.isFavorite,
+        canvasModeId: selectedCanvasModeId,
+        code,
+        updatedAt: now,
+        lastOpenedAt: markOpened ? now : existingProject?.lastOpenedAt ?? now,
+      };
+
+      if (versionLabel) {
+        nextProject = attachVersionToProject(
+          nextProject,
+          createVersionRecord({
+            label: versionLabel,
+            code,
+            canvasModeId: selectedCanvasModeId,
+            trigger,
+          })
+        );
+      }
+
+      const nextProjects = upsertProject(savedProjects, nextProject);
+      commitProjects(nextProjects, nextProject.id);
+      return nextProject;
+    },
+    [code, commitProjects, currentProjectId, projectDraft, savedProjects, selectedCanvasModeId]
+  );
+
   const clearCanvasDrift = useCallback(() => {
     setCanvasDrift({
       isDirty: false,
       changedObjects: [],
     });
+    setSelectedDriftNames([]);
     dirtyWarningLoggedRef.current = false;
+    driftBaselineCodeRef.current = null;
   }, []);
+
+  const appendLog = useCallback((message, level = 'info') => {
+    setLogs((prev) => [
+      ...prev,
+      {
+        message,
+        level,
+        timestamp: new Date(),
+      },
+    ]);
+  }, []);
+
+  const refreshAdminDashboard = useCallback(async (options = {}) => {
+    const { silent = false } = options;
+
+    setAdminState((prev) => ({
+      state: prev.state === 'ready' && silent ? prev.state : 'loading',
+      message:
+        prev.state === 'ready' && silent
+          ? prev.message
+          : silent
+          ? '正在同步最新后台快照'
+          : '正在拉取超级后台快照',
+      isRefreshing: true,
+    }));
+
+    try {
+      const snapshot = await fetchAdminDashboard();
+      const generatedAt = snapshot?.generatedAt
+        ? new Date(snapshot.generatedAt).toLocaleString('zh-CN')
+        : '刚刚';
+
+      setAdminDashboard(snapshot);
+      setAdminState({
+        state: 'ready',
+        message: `最近刷新：${generatedAt}`,
+        isRefreshing: false,
+      });
+    } catch (error) {
+      setAdminState({
+        state: 'error',
+        message: error.message,
+        isRefreshing: false,
+      });
+    }
+  }, []);
+
+  const executePreparedCommands = useCallback(
+    async (commands, options = {}) => {
+      const { nextCodeText = null, logMessage = null, versionLabel = null } = options;
+
+      if (!Array.isArray(commands) || commands.length === 0) {
+        throw new Error('No commands available to execute');
+      }
+
+      if (!dispatcherRef.current) {
+        queuedScriptRef.current = {
+          commands,
+          nextCodeText,
+          logMessage,
+        };
+
+        if (nextCodeText !== null) {
+          setCode(nextCodeText);
+        }
+
+        appendLog(
+          logMessage
+            ? `${logMessage}，画布就绪后会自动执行`
+            : '画布尚未就绪，脚本已加入自动执行队列',
+          'info'
+        );
+        return false;
+      }
+
+      if (nextCodeText !== null) {
+        setCode(nextCodeText);
+      }
+
+      clearCanvasDrift();
+      setErrors([]);
+
+      if (logMessage) {
+        appendLog(logMessage, 'info');
+      }
+
+      setIsExecuting(true);
+      startTimeRef.current = Date.now();
+
+      if (isCompactLayout) {
+        setActiveTab('canvas');
+      }
+
+      await dispatcherRef.current.execute(commands, {
+        resetBeforeRun: true,
+        verbose: true,
+      });
+
+      if (canvasLockRef.current) {
+        GeoGebraEngine.setInteractivePointsLocked(true);
+      }
+
+      refreshCanvasObjects();
+
+      if (versionLabel) {
+        saveProjectRecord({
+          versionLabel,
+          trigger: 'execution',
+        });
+      }
+
+      return true;
+    },
+    [appendLog, clearCanvasDrift, isCompactLayout, refreshCanvasObjects, saveProjectRecord]
+  );
+
+  const loadSharedCanvas = useCallback(
+    async (slug) => {
+      const share = await fetchShare(slug);
+      const commands = Array.isArray(share?.commands)
+        ? share.commands.filter((command) => typeof command === 'string' && command.trim().length > 0)
+        : [];
+
+      if (commands.length === 0) {
+        throw new Error('分享内容中没有可执行的 GeoGebra 指令');
+      }
+
+      const nextModeId = CANVAS_MODES.some((mode) => mode.id === share.canvasMode)
+        ? share.canvasMode
+        : DEFAULT_CANVAS_MODE_ID;
+      const nextCodeText = normalizeScriptText(commands);
+      const shareMessage = `已载入分享：${share.title}`;
+
+      setActiveShareSlug(share.slug);
+      setLatestShare({
+        shareId: share.shareId,
+        slug: share.slug,
+        shareUrl: share.shareUrl,
+        embedUrl: share.embedUrl,
+        posterUrl: share.posterUrl,
+        localShareUrl: buildSharePageUrl(share.slug),
+      });
+
+      if (nextModeId !== selectedCanvasModeId) {
+        queuedScriptRef.current = {
+          commands,
+          nextCodeText,
+          logMessage: shareMessage,
+        };
+        dispatcherRef.current = null;
+        clearCanvasDrift();
+        setCode(nextCodeText);
+        setErrors([]);
+        appendLog(`${shareMessage}，正在切换画布`, 'info');
+        setSelectedCanvasModeId(nextModeId);
+
+        if (isCompactLayout) {
+          setActiveTab('canvas');
+        }
+
+        return share;
+      }
+
+      await executePreparedCommands(commands, {
+        nextCodeText,
+        logMessage: shareMessage,
+        versionLabel: '载入分享',
+      });
+
+      return share;
+    },
+    [appendLog, clearCanvasDrift, executePreparedCommands, isCompactLayout, selectedCanvasModeId]
+  );
+
+  const handleReferenceFileChange = useCallback((file) => {
+    setReferenceFile(file ?? null);
+  }, []);
+
+  const handleGenerateFromBackend = useCallback(async () => {
+    const trimmedPrompt = generationPrompt.trim();
+    if (!trimmedPrompt) {
+      alert('请输入要发送给后端的生成提示词');
+      return;
+    }
+
+    if (canvasDrift.isDirty) {
+      const confirmed = window.confirm(
+        '当前画布存在尚未同步回代码的拖拽结果。继续生成会用新的后端结果覆盖当前脚本，是否继续？'
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setIsGeneratingScript(true);
+    setLatestShare(null);
+
+    try {
+      const uploadTicket = await reserveUpload({
+        filename: referenceFile?.name || `scene-${Date.now()}.png`,
+        mimeType: referenceFile?.type || 'application/octet-stream',
+        size: referenceFile?.size || 0,
+        purpose: 'ai_drawing_input',
+        canvasMode: selectedCanvasModeId,
+      });
+
+      if (referenceFile) {
+        await uploadAsset({
+          uploadUrl: uploadTicket.uploadUrl,
+          file: referenceFile,
+          mimeType: referenceFile.type,
+        });
+      }
+
+      const job = await createDrawingJob({
+        assetId: uploadTicket.assetId,
+        prompt: trimmedPrompt,
+        canvasMode: selectedCanvasModeId,
+        responseFormat: 'geogebra_commands_v1',
+        locale: 'zh-CN',
+      });
+
+      appendLog(`后端任务已创建：${job.jobId}`, 'info');
+
+      const result = await pollDrawingJob(job.jobId);
+      const nextCodeText = normalizeScriptText(result.commands);
+
+      setLatestJobResult(result);
+      setScriptInsights(null);
+      appendLog(`后端生成完成：${result.sceneSummary}`, 'success');
+
+      await executePreparedCommands(result.commands, {
+        nextCodeText,
+        logMessage: `已载入后端生成结果：${result.sceneSummary}`,
+        versionLabel: 'AI 生成脚本',
+      });
+    } catch (error) {
+      setErrors([
+        {
+          message: error.message,
+          timestamp: new Date(),
+        },
+      ]);
+      appendLog(`后端生成失败：${error.message}`, 'error');
+      alert(error.message);
+    } finally {
+      setIsGeneratingScript(false);
+    }
+  }, [
+    appendLog,
+    canvasDrift.isDirty,
+    executePreparedCommands,
+    generationPrompt,
+    referenceFile,
+    selectedCanvasModeId,
+  ]);
+
+  const handlePublishShare = useCallback(async () => {
+    let commands = [];
+
+    try {
+      commands = Preprocessor.clean(code);
+    } catch (error) {
+      alert(error.message);
+      return;
+    }
+
+    if (commands.length === 0) {
+      alert('当前没有可发布的脚本内容');
+      return;
+    }
+
+    setIsPublishingShare(true);
+
+    try {
+      const imageData = await GeoGebraEngine.exportImage();
+      if (!imageData) {
+        throw new Error('当前画布无法导出封面图，请先运行脚本后再发布');
+      }
+
+      const coverFile = await dataUrlToFile(imageData, `share-${Date.now()}.png`);
+      const uploadTicket = await reserveUpload({
+        filename: coverFile.name,
+        mimeType: coverFile.type,
+        size: coverFile.size,
+        purpose: 'share_cover',
+        canvasMode: selectedCanvasModeId,
+      });
+
+      await uploadAsset({
+        uploadUrl: uploadTicket.uploadUrl,
+        file: coverFile,
+        mimeType: coverFile.type,
+      });
+
+      const share = await createShare({
+        title: buildShareTitle(
+          latestJobResult?.sceneSummary || generationPrompt,
+          `${selectedCanvasMode.label} share`
+        ),
+        canvasMode: selectedCanvasModeId,
+        commands,
+        coverAssetId: uploadTicket.assetId,
+        visibility: 'public',
+        allowFork: true,
+      });
+
+      const localShareUrl = buildSharePageUrl(share.slug);
+      setLatestShare({
+        ...share,
+        localShareUrl,
+      });
+      setActiveShareSlug(share.slug);
+      appendLog(`分享已发布：${localShareUrl}`, 'success');
+    } catch (error) {
+      appendLog(`分享发布失败：${error.message}`, 'error');
+      alert(error.message);
+    } finally {
+      setIsPublishingShare(false);
+    }
+  }, [appendLog, code, generationPrompt, latestJobResult, selectedCanvasMode.label, selectedCanvasModeId]);
 
   const initializeDispatcher = useCallback(() => {
     if (dispatcherRef.current) {
@@ -560,10 +1085,12 @@ const App = () => {
       if (canvasLockRef.current) {
         GeoGebraEngine.setInteractivePointsLocked(true);
       }
+
+      refreshCanvasObjects();
     });
 
     dispatcherRef.current = dispatcher;
-  }, []);
+  }, [refreshCanvasObjects]);
 
   const handleGeoGebraReady = useCallback(() => {
     console.log('GeoGebra Applet 已准备就绪');
@@ -581,7 +1108,17 @@ const App = () => {
     if (canvasLockRef.current) {
       GeoGebraEngine.setInteractivePointsLocked(true);
     }
-  }, [initializeDispatcher, selectedCanvasMode.label]);
+    refreshCanvasObjects();
+    if (queuedScriptRef.current) {
+      const queuedScript = queuedScriptRef.current;
+      queuedScriptRef.current = null;
+
+      void executePreparedCommands(queuedScript.commands, {
+        nextCodeText: queuedScript.nextCodeText,
+        logMessage: queuedScript.logMessage,
+      });
+    }
+  }, [executePreparedCommands, initializeDispatcher, refreshCanvasObjects, selectedCanvasMode.label]);
 
   const handleRun = useCallback(async () => {
     if (!dispatcherRef.current) {
@@ -635,27 +1172,16 @@ const App = () => {
       return;
     }
 
-    clearCanvasDrift();
-    setIsExecuting(true);
-    startTimeRef.current = Date.now();
-
-    if (isCompactLayout) {
-      setActiveTab('canvas');
-    }
-
-    await dispatcherRef.current.execute(commands, {
-      resetBeforeRun: true,
-      verbose: true,
+    await executePreparedCommands(commands, {
+      versionLabel: '运行脚本',
     });
-
-    if (canvasLockRef.current) {
-      GeoGebraEngine.setInteractivePointsLocked(true);
-    }
-  }, [canvasDrift.isDirty, clearCanvasDrift, code, isCompactLayout]);
+  }, [canvasDrift.isDirty, code, executePreparedCommands, isCompactLayout]);
 
   const handleClear = useCallback(() => {
     GeoGebraEngine.clear();
     clearCanvasDrift();
+    resetVersionBrowsing();
+    refreshCanvasObjects();
     setLogs((prev) => [
       ...prev,
       {
@@ -664,7 +1190,7 @@ const App = () => {
         timestamp: new Date(),
       },
     ]);
-  }, [clearCanvasDrift]);
+  }, [clearCanvasDrift, refreshCanvasObjects, resetVersionBrowsing]);
 
   const handleExport = useCallback(async () => {
     const imageData = await GeoGebraEngine.exportImage();
@@ -690,6 +1216,7 @@ const App = () => {
   const handleReset = useCallback(() => {
     GeoGebraEngine.reset();
     clearCanvasDrift();
+    resetVersionBrowsing();
     if (selectedCanvasModeId !== DEFAULT_CANVAS_MODE_ID) {
       dispatcherRef.current = null;
     }
@@ -704,33 +1231,22 @@ const App = () => {
     ]);
     setErrors([]);
     setExecutionStats(null);
+    setLatestJobResult(null);
+    setLatestShare(null);
+    setActiveShareSlug(null);
+    setScriptInsights(null);
+    setVersionComparison(null);
+    setLectureState({
+      commands: [],
+      currentStep: 0,
+      isPlaying: false,
+    });
+    refreshCanvasObjects();
 
     if (isCompactLayout) {
       setActiveTab('code');
     }
-  }, [clearCanvasDrift, isCompactLayout, selectedCanvasModeId]);
-
-  const handleExportCanvasState = useCallback(() => {
-    const pointStates = GeoGebraEngine.exportFreePointsAsCode(canvasDrift.changedObjects);
-
-    if (pointStates.length === 0) {
-      alert('当前没有可同步回代码的自由点。');
-      return;
-    }
-
-    const nextCode = mergeCanvasStateIntoCode(code, pointStates);
-    setCode(nextCode);
-    clearCanvasDrift();
-    setActiveTab('code');
-    setLogs((prev) => [
-      ...prev,
-      {
-        message: `已将 ${pointStates.map((state) => state.name).join(', ')} 的当前位置同步回代码`,
-        level: 'success',
-        timestamp: new Date(),
-      },
-    ]);
-  }, [canvasDrift.changedObjects, clearCanvasDrift, code]);
+  }, [clearCanvasDrift, isCompactLayout, refreshCanvasObjects, resetVersionBrowsing, selectedCanvasModeId]);
 
   const handleToggleCanvasLock = useCallback(() => {
     setIsCanvasLocked((prev) => !prev);
@@ -738,7 +1254,13 @@ const App = () => {
 
   const handleCanvasModeChange = useCallback(
     (nextModeId) => {
-      if (!nextModeId || nextModeId === selectedCanvasModeId || isExecuting) {
+      if (
+        !nextModeId
+        || nextModeId === selectedCanvasModeId
+        || isExecuting
+        || isGeneratingScript
+        || isPublishingShare
+      ) {
         return;
       }
 
@@ -758,10 +1280,12 @@ const App = () => {
       }
 
       clearCanvasDrift();
+      resetVersionBrowsing();
       dispatcherRef.current = null;
       setSelectedCanvasModeId(nextModeId);
       setErrors([]);
       setExecutionStats(null);
+      setScriptInsights(null);
       setLogs([
         {
           message: `正在切换到${nextMode.label}画布`,
@@ -774,7 +1298,16 @@ const App = () => {
         setActiveTab('canvas');
       }
     },
-    [canvasDrift.isDirty, clearCanvasDrift, isCompactLayout, isExecuting, selectedCanvasModeId]
+    [
+      canvasDrift.isDirty,
+      clearCanvasDrift,
+      isCompactLayout,
+      isExecuting,
+      isGeneratingScript,
+      isPublishingShare,
+      resetVersionBrowsing,
+      selectedCanvasModeId,
+    ]
   );
 
   const handleLoadSnippet = useCallback(
@@ -791,8 +1324,10 @@ const App = () => {
 
       setCode(`${snippet.code.trim()}\n`);
       clearCanvasDrift();
+      resetVersionBrowsing();
       setErrors([]);
       setExecutionStats(null);
+      setScriptInsights(null);
       setLogs((prev) => [
         ...prev,
         {
@@ -806,8 +1341,557 @@ const App = () => {
         setActiveTab('code');
       }
     },
-    [clearCanvasDrift, code, isCompactLayout]
+    [clearCanvasDrift, code, isCompactLayout, resetVersionBrowsing]
   );
+
+  const resetVersionBrowsing = useCallback(() => {
+    versionDraftStateRef.current = null;
+    setVersionCursor(-1);
+  }, []);
+
+  const loadProjectIntoEditor = useCallback(
+    (project) => {
+      if (!project) {
+        return;
+      }
+
+      if (
+        code.trim().length > 0
+        && project.id !== currentProjectId
+        && !window.confirm('切换项目会替换当前编辑器内容，是否继续？')
+      ) {
+        return;
+      }
+
+      resetVersionBrowsing();
+      clearCanvasDrift();
+      setScriptInsights(null);
+      setVersionComparison(null);
+      setCurrentProjectId(project.id);
+      setProjectDraft({
+        title: project.title,
+        folder: project.folder,
+        tagsInput: formatTagsInput(project.tags),
+        isFavorite: Boolean(project.isFavorite),
+      });
+      setCode(project.code || `${DEFAULT_CODE.trim()}\n`);
+      setErrors([]);
+      setExecutionStats(null);
+
+      const nextProjects = upsertProject(
+        savedProjects.map((item) =>
+          item.id === project.id
+            ? {
+                ...item,
+                lastOpenedAt: new Date().toISOString(),
+              }
+            : item
+        ),
+        {
+          ...project,
+          lastOpenedAt: new Date().toISOString(),
+        }
+      );
+      commitProjects(nextProjects, project.id);
+
+      if (project.canvasModeId && project.canvasModeId !== selectedCanvasModeId) {
+        dispatcherRef.current = null;
+        setSelectedCanvasModeId(project.canvasModeId);
+      }
+
+      appendLog(`已打开项目：${project.title}`, 'info');
+      if (isCompactLayout) {
+        setActiveTab('code');
+      }
+    },
+    [
+      appendLog,
+      clearCanvasDrift,
+      code,
+      commitProjects,
+      currentProjectId,
+      isCompactLayout,
+      resetVersionBrowsing,
+      savedProjects,
+      selectedCanvasModeId,
+    ]
+  );
+
+  const handleCreateProject = useCallback(() => {
+    const project = createProjectRecord({
+      title: `${DEFAULT_PROJECT_TITLE} ${savedProjects.length + 1}`,
+      folder: DEFAULT_PROJECT_FOLDER,
+      tags: ['草稿'],
+      canvasModeId: DEFAULT_CANVAS_MODE_ID,
+      code: `// 新项目\n// 在这里输入 GeoGebra 指令\n`,
+    });
+
+    commitProjects(upsertProject(savedProjects, project), project.id);
+    resetVersionBrowsing();
+    clearCanvasDrift();
+    setProjectDraft({
+      title: project.title,
+      folder: project.folder,
+      tagsInput: formatTagsInput(project.tags),
+      isFavorite: false,
+    });
+    setCode(project.code);
+    setSelectedCanvasModeId(DEFAULT_CANVAS_MODE_ID);
+    setScriptInsights(null);
+    setVersionComparison(null);
+    appendLog(`已创建项目：${project.title}`, 'success');
+
+    if (isCompactLayout) {
+      setActiveTab('code');
+    }
+  }, [appendLog, clearCanvasDrift, commitProjects, isCompactLayout, resetVersionBrowsing, savedProjects]);
+
+  const handleSaveProject = useCallback(() => {
+    const project = saveProjectRecord({
+      versionLabel: '手动保存',
+      trigger: 'manual',
+      markOpened: true,
+    });
+    resetVersionBrowsing();
+    appendLog(`项目已保存：${project.title}`, 'success');
+  }, [appendLog, resetVersionBrowsing, saveProjectRecord]);
+
+  const handleSaveSnapshot = useCallback(() => {
+    const project = saveProjectRecord({
+      versionLabel: '手动快照',
+      trigger: 'snapshot',
+    });
+    resetVersionBrowsing();
+    appendLog(`已为 ${project.title} 创建快照`, 'info');
+  }, [appendLog, resetVersionBrowsing, saveProjectRecord]);
+
+  const applyVersionState = useCallback(
+    (version, cursor) => {
+      if (!version) {
+        return;
+      }
+
+      clearCanvasDrift();
+      setCode(version.code);
+      setVersionCursor(cursor);
+      setVersionComparison({
+        version,
+        summary: summarizeCodeDiff(version.code, code),
+      });
+      setScriptInsights(null);
+
+      if (version.canvasModeId && version.canvasModeId !== selectedCanvasModeId) {
+        dispatcherRef.current = null;
+        setSelectedCanvasModeId(version.canvasModeId);
+      }
+
+      if (isCompactLayout) {
+        setActiveTab('code');
+      }
+    },
+    [clearCanvasDrift, code, isCompactLayout, selectedCanvasModeId]
+  );
+
+  const handleCompareVersion = useCallback(
+    (version) => {
+      if (!version) {
+        return;
+      }
+
+      setVersionComparison({
+        version,
+        summary: summarizeCodeDiff(version.code, code),
+      });
+    },
+    [code]
+  );
+
+  const handleRollbackToVersion = useCallback(
+    (version, cursor) => {
+      if (!version) {
+        return;
+      }
+
+      if (!window.confirm(`回滚到版本「${version.label}」后，当前未保存编辑会被覆盖。是否继续？`)) {
+        return;
+      }
+
+      if (versionDraftStateRef.current === null) {
+        versionDraftStateRef.current = {
+          code,
+          canvasModeId: selectedCanvasModeId,
+        };
+      }
+
+      applyVersionState(version, cursor);
+      appendLog(`已回滚到版本：${version.label}`, 'warning');
+    },
+    [appendLog, applyVersionState, code, selectedCanvasModeId]
+  );
+
+  const handleUndoVersion = useCallback(() => {
+    const versions = currentProject?.versions ?? [];
+    if (versions.length === 0) {
+      return;
+    }
+
+    const nextCursor = Math.min(versionCursor + 1, versions.length - 1);
+    if (nextCursor === versionCursor) {
+      return;
+    }
+
+    if (versionDraftStateRef.current === null) {
+      versionDraftStateRef.current = {
+        code,
+        canvasModeId: selectedCanvasModeId,
+      };
+    }
+
+    applyVersionState(versions[nextCursor], nextCursor);
+    appendLog(`版本撤销到：${versions[nextCursor].label}`, 'info');
+  }, [appendLog, applyVersionState, code, currentProject?.versions, selectedCanvasModeId, versionCursor]);
+
+  const handleRedoVersion = useCallback(() => {
+    const versions = currentProject?.versions ?? [];
+
+    if (versionCursor === -1) {
+      return;
+    }
+
+    if (versionCursor === 0 && versionDraftStateRef.current) {
+      const draftState = versionDraftStateRef.current;
+      versionDraftStateRef.current = null;
+      clearCanvasDrift();
+      setCode(draftState.code);
+      setVersionCursor(-1);
+      setVersionComparison(null);
+
+      if (draftState.canvasModeId !== selectedCanvasModeId) {
+        dispatcherRef.current = null;
+        setSelectedCanvasModeId(draftState.canvasModeId);
+      }
+
+      appendLog('已恢复到当前编辑版本', 'info');
+      return;
+    }
+
+    const nextCursor = Math.max(versionCursor - 1, 0);
+    if (!versions[nextCursor]) {
+      return;
+    }
+
+    applyVersionState(versions[nextCursor], nextCursor);
+    appendLog(`版本前进到：${versions[nextCursor].label}`, 'info');
+  }, [
+    appendLog,
+    applyVersionState,
+    clearCanvasDrift,
+    currentProject?.versions,
+    selectedCanvasModeId,
+    versionCursor,
+  ]);
+
+  const handleParameterValueChange = useCallback((name, nextValue) => {
+    setParameterValues((prev) => ({
+      ...prev,
+      [name]: nextValue,
+    }));
+  }, []);
+
+  const handleApplyParameters = useCallback(
+    async (shouldRun = false) => {
+      if (parameterControls.length === 0) {
+        alert('当前脚本中没有可控制的简单参数。');
+        return;
+      }
+
+      let nextCode = code;
+      parameterControls.forEach((control) => {
+        nextCode = replaceAssignmentValue(nextCode, control.name, parameterValues[control.name]);
+      });
+
+      setCode(nextCode);
+      appendLog('参数面板已更新脚本中的变量值', 'success');
+
+      if (!shouldRun) {
+        return;
+      }
+
+      const commands = Preprocessor.clean(nextCode);
+      await executePreparedCommands(commands, {
+        nextCodeText: nextCode,
+        logMessage: '参数变更已重新渲染',
+        versionLabel: '参数调参',
+      });
+    },
+    [appendLog, code, executePreparedCommands, parameterControls, parameterValues]
+  );
+
+  const handleToggleDriftName = useCallback((name) => {
+    setSelectedDriftNames((prev) =>
+      prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]
+    );
+  }, []);
+
+  const handleSyncSelectedCanvasState = useCallback(() => {
+    const pointStates = GeoGebraEngine.exportFreePointsAsCode(selectedDriftNames);
+
+    if (pointStates.length === 0) {
+      alert('请先选择需要同步回代码的自由点。');
+      return;
+    }
+
+    if (
+      driftHasConflict
+      && !window.confirm('在拖拽期间你已经修改过脚本。继续同步会以画布坐标覆盖对应变量，是否继续？')
+    ) {
+      return;
+    }
+
+    const nextCode = mergeCanvasStateIntoCode(code, pointStates);
+    setCode(nextCode);
+    clearCanvasDrift();
+    resetVersionBrowsing();
+    saveProjectRecord({
+      versionLabel: '同步自由点',
+      trigger: 'canvas_sync',
+    });
+    setActiveTab('code');
+    appendLog(
+      `已同步自由点：${pointStates.map((state) => state.name).join(', ')}`,
+      'success'
+    );
+  }, [
+    clearCanvasDrift,
+    code,
+    driftHasConflict,
+    resetVersionBrowsing,
+    saveProjectRecord,
+    selectedDriftNames,
+    appendLog,
+  ]);
+
+  const handleDiscardCanvasDrift = useCallback(() => {
+    clearCanvasDrift();
+    appendLog('已忽略本次拖拽结果，保留当前脚本内容', 'info');
+  }, [appendLog, clearCanvasDrift]);
+
+  const handleToggleStyleObjectName = useCallback((objectName) => {
+    setSelectedStyleNames((prev) =>
+      prev.includes(objectName)
+        ? prev.filter((item) => item !== objectName)
+        : [...prev, objectName]
+    );
+  }, []);
+
+  const handleApplyStyles = useCallback(() => {
+    const result = GeoGebraEngine.applyObjectStyles({
+      objectNames: selectedStyleScopeNames,
+      color: styleDraft.color,
+      lineThickness: styleDraft.lineThickness,
+      pointSize: styleDraft.pointSize,
+      labelVisible: styleDraft.labelVisible,
+    });
+
+    GeoGebraEngine.setGridVisible(styleDraft.showGrid);
+    GeoGebraEngine.setAxesVisible(styleDraft.showAxes);
+    appendLog(
+      `样式已应用到 ${result.updatedCount}/${result.attemptedCount} 个对象`,
+      result.updatedCount > 0 ? 'success' : 'warning'
+    );
+  }, [appendLog, selectedStyleScopeNames, styleDraft]);
+
+  const runLectureStep = useCallback(
+    async (commands, nextStep) => {
+      if (nextStep <= 0) {
+        GeoGebraEngine.clear();
+        clearCanvasDrift();
+        setLectureState((prev) => ({
+          ...prev,
+          currentStep: 0,
+        }));
+        return;
+      }
+
+      await executePreparedCommands(commands.slice(0, nextStep), {
+        logMessage: `讲解模式：第 ${nextStep}/${commands.length} 步`,
+      });
+
+      setLectureState((prev) => ({
+        ...prev,
+        currentStep: nextStep,
+      }));
+    },
+    [clearCanvasDrift, executePreparedCommands]
+  );
+
+  const handlePrepareLecture = useCallback(() => {
+    let commands = [];
+
+    try {
+      commands = Preprocessor.clean(code);
+    } catch (error) {
+      alert(error.message);
+      return;
+    }
+
+    if (commands.length === 0) {
+      alert('当前脚本没有可讲解的命令。');
+      return;
+    }
+
+    lecturePlayTokenRef.current++;
+    setLectureState({
+      commands,
+      currentStep: 0,
+      isPlaying: false,
+    });
+    appendLog(`讲解模式已准备，共 ${commands.length} 步`, 'info');
+  }, [appendLog, code]);
+
+  const handlePreviousLectureStep = useCallback(async () => {
+    if (lectureState.commands.length === 0) {
+      return;
+    }
+
+    const nextStep = Math.max(lectureState.currentStep - 1, 0);
+    await runLectureStep(lectureState.commands, nextStep);
+  }, [lectureState.commands, lectureState.currentStep, runLectureStep]);
+
+  const handleNextLectureStep = useCallback(async () => {
+    if (lectureState.commands.length === 0) {
+      handlePrepareLecture();
+      return;
+    }
+
+    const nextStep = Math.min(lectureState.currentStep + 1, lectureState.commands.length);
+    await runLectureStep(lectureState.commands, nextStep);
+  }, [handlePrepareLecture, lectureState.commands, lectureState.currentStep, runLectureStep]);
+
+  const handleAutoPlayLecture = useCallback(async () => {
+    let commands = lectureState.commands;
+    let startStep = lectureState.currentStep;
+
+    if (commands.length === 0) {
+      try {
+        commands = Preprocessor.clean(code);
+      } catch (error) {
+        alert(error.message);
+        return;
+      }
+
+      if (commands.length === 0) {
+        alert('当前脚本没有可讲解的命令。');
+        return;
+      }
+
+      startStep = 0;
+      setLectureState({
+        commands,
+        currentStep: 0,
+        isPlaying: true,
+      });
+    } else {
+      setLectureState((prev) => ({
+        ...prev,
+        isPlaying: true,
+      }));
+    }
+
+    const playToken = Date.now();
+    lecturePlayTokenRef.current = playToken;
+
+    for (let step = startStep + 1; step <= commands.length; step++) {
+      if (lecturePlayTokenRef.current !== playToken) {
+        break;
+      }
+
+      await runLectureStep(commands, step);
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 900);
+      });
+    }
+
+    setLectureState((prev) => ({
+      ...prev,
+      isPlaying: false,
+    }));
+  }, [code, lectureState.commands, lectureState.currentStep, runLectureStep]);
+
+  const handleStopLecture = useCallback(() => {
+    lecturePlayTokenRef.current++;
+    setLectureState((prev) => ({
+      ...prev,
+      isPlaying: false,
+    }));
+  }, []);
+
+  const handleTogglePresentationMode = useCallback(async () => {
+    const nextValue = !presentationMode;
+    setPresentationMode(nextValue);
+
+    try {
+      if (nextValue && workspaceShellRef.current?.requestFullscreen) {
+        await workspaceShellRef.current.requestFullscreen();
+      }
+
+      if (!nextValue && document.fullscreenElement && document.exitFullscreen) {
+        await document.exitFullscreen();
+      }
+    } catch (_error) {
+      // Fullscreen API 不可用时，仍保留页面级演示模式
+    }
+  }, [presentationMode]);
+
+  const handleGenerateInsights = useCallback(async () => {
+    let commands = [];
+
+    try {
+      commands = Preprocessor.clean(code);
+    } catch (error) {
+      alert(error.message);
+      return;
+    }
+
+    if (commands.length === 0) {
+      alert('当前脚本为空，无法生成解读。');
+      return;
+    }
+
+    setIsGeneratingInsights(true);
+
+    try {
+      const result = await createScriptInsights({
+        prompt: generationPrompt,
+        commands,
+        locale: 'zh-CN',
+      });
+      setScriptInsights(result);
+      appendLog('已生成图形解释与标注建议', 'success');
+    } catch (error) {
+      appendLog(`图形解释生成失败：${error.message}`, 'error');
+      alert(error.message);
+    } finally {
+      setIsGeneratingInsights(false);
+    }
+  }, [appendLog, code, generationPrompt]);
+
+  const handleAppendInsightComments = useCallback(() => {
+    if (!scriptInsights) {
+      return;
+    }
+
+    setCode((prev) => appendInsightCommentsToCode(prev, scriptInsights));
+    appendLog('已将图形解释写入脚本注释', 'success');
+  }, [appendLog, scriptInsights]);
+
+  const handleExportScriptFile = useCallback(() => {
+    downloadTextFile(
+      `${(projectDraft.title.trim() || DEFAULT_PROJECT_TITLE).replace(/\s+/g, '-')}.ggs.txt`,
+      code
+    );
+    appendLog('脚本已导出为文本文件', 'success');
+  }, [appendLog, code, projectDraft.title]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -822,6 +1906,189 @@ const App = () => {
   useEffect(() => {
     isExecutingRef.current = isExecuting;
   }, [isExecuting]);
+
+  useEffect(() => {
+    if (hasInitializedWorkspaceRef.current || initialShareSlugRef.current) {
+      return;
+    }
+
+    hasInitializedWorkspaceRef.current = true;
+
+    const initialProject =
+      storedStudioState.projects.find((project) => project.id === storedStudioState.currentProjectId)
+      ?? storedStudioState.projects[0]
+      ?? null;
+
+    if (initialProject) {
+      setCurrentProjectId(initialProject.id);
+      setProjectDraft({
+        title: initialProject.title,
+        folder: initialProject.folder,
+        tagsInput: formatTagsInput(initialProject.tags),
+        isFavorite: Boolean(initialProject.isFavorite),
+      });
+      setCode(initialProject.code || DEFAULT_CODE);
+
+      if (initialProject.canvasModeId && initialProject.canvasModeId !== selectedCanvasModeId) {
+        dispatcherRef.current = null;
+        setSelectedCanvasModeId(initialProject.canvasModeId);
+      }
+
+      return;
+    }
+
+    const project = createProjectRecord({
+      title: DEFAULT_PROJECT_TITLE,
+      folder: DEFAULT_PROJECT_FOLDER,
+      tags: ['示例'],
+      canvasModeId: selectedCanvasModeId,
+      code,
+    });
+
+    commitProjects(upsertProject([], project), project.id);
+    setProjectDraft({
+      title: project.title,
+      folder: project.folder,
+      tagsInput: formatTagsInput(project.tags),
+      isFavorite: false,
+    });
+  }, [code, commitProjects, selectedCanvasModeId, storedStudioState.projects, storedStudioState.currentProjectId]);
+
+  useEffect(() => {
+    if (!hasInitializedWorkspaceRef.current) {
+      return undefined;
+    }
+
+    if (versionCursor >= 0) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      saveProjectRecord();
+    }, 800);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    code,
+    projectDraft.folder,
+    projectDraft.isFavorite,
+    projectDraft.tagsInput,
+    projectDraft.title,
+    saveProjectRecord,
+    selectedCanvasModeId,
+    versionCursor,
+  ]);
+
+  useEffect(() => {
+    setParameterValues((prev) => {
+      const nextValues = {};
+
+      parameterControls.forEach((control) => {
+        nextValues[control.name] = Object.prototype.hasOwnProperty.call(prev, control.name)
+          ? prev[control.name]
+          : control.value;
+      });
+
+      return nextValues;
+    });
+  }, [parameterControls]);
+
+  useEffect(() => {
+    setSelectedDriftNames((prev) => {
+      const nextNames = pointDiffs
+        .filter((item) => item.hasChanged)
+        .map((item) => item.name);
+
+      if (nextNames.length === 0) {
+        return [];
+      }
+
+      const preserved = prev.filter((name) => nextNames.includes(name));
+      return preserved.length > 0 ? preserved : nextNames;
+    });
+  }, [pointDiffs]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const syncBackendStatus = async () => {
+      try {
+        const [health, modelConfig] = await Promise.all([fetchHealth(), fetchModelConfig()]);
+        if (isCancelled) {
+          return;
+        }
+
+        setBackendStatus({
+          state: 'connected',
+          message: health?.status === 'ok' ? '后端服务可用' : '后端已响应',
+          modelName: modelConfig?.modelName || '',
+          providerBaseUrl: modelConfig?.baseUrl || '',
+        });
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+
+        setBackendStatus({
+          state: 'error',
+          message: error.message,
+          modelName: '',
+          providerBaseUrl: '',
+        });
+      }
+    };
+
+    void syncBackendStatus();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    void refreshAdminDashboard();
+  }, [refreshAdminDashboard]);
+
+  useEffect(() => {
+    if (!isAdminAutoRefresh) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshAdminDashboard({ silent: true });
+    }, 8000);
+
+    return () => window.clearInterval(timer);
+  }, [isAdminAutoRefresh, refreshAdminDashboard]);
+
+  useEffect(() => {
+    if (!initialShareSlugRef.current || hasLoadedInitialShareRef.current) {
+      return;
+    }
+
+    hasLoadedInitialShareRef.current = true;
+
+    void loadSharedCanvas(initialShareSlugRef.current).catch((error) => {
+      setErrors([
+        {
+          message: error.message,
+          timestamp: new Date(),
+        },
+      ]);
+      appendLog(`分享加载失败：${error.message}`, 'error');
+    });
+  }, [appendLog, loadSharedCanvas]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement) {
+        setPresentationMode(false);
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   useEffect(() => {
     const link = openSourceLinkRef.current;
@@ -896,10 +2163,15 @@ const App = () => {
         return;
       }
 
+      if (driftBaselineCodeRef.current === null) {
+        driftBaselineCodeRef.current = code;
+      }
+
       setCanvasDrift((prev) => ({
         isDirty: true,
         changedObjects: Array.from(new Set([...prev.changedObjects, ...changedPointNames])),
       }));
+      refreshCanvasObjects();
 
       if (!dirtyWarningLoggedRef.current) {
         dirtyWarningLoggedRef.current = true;
@@ -915,7 +2187,7 @@ const App = () => {
     });
 
     return unsubscribe;
-  }, []);
+  }, [code, refreshCanvasObjects]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -965,6 +2237,7 @@ const App = () => {
 
             <div className="global-nav-meta">
               <span className="nav-pill">{selectedCanvasMode.label}</span>
+              <span className={`nav-pill nav-pill-${backendTone}`}>{backendStatusText}</span>
               <span className={`nav-pill nav-pill-${syncTone}`}>{syncStatusText}</span>
               <span className={`nav-pill nav-pill-${recentRunTone}`}>{recentRunStatus}</span>
             </div>
@@ -1163,8 +2436,52 @@ const App = () => {
           </article>
         </section>
 
-        <main className="workspace-shell">
-          {isCompactLayout && (
+        <main
+          ref={workspaceShellRef}
+          className={`workspace-shell ${presentationMode ? 'presentation-mode' : ''}`}
+        >
+          {!presentationMode && (
+            <div className="workspace-head">
+              <div>
+                <span className="section-kicker">Studio Workspace</span>
+                <h2>项目空间、参数调参与讲解演示</h2>
+                <p>
+                  这一层把编辑器从单次运行工具升级成持续生产工作台。你可以自动保存项目、管理版本、
+                  选中拖拽回写、生成图形解释，并切到讲解或演示模式。
+                </p>
+              </div>
+
+              <div className="workspace-head-note">
+                <span className="workspace-head-label">当前项目</span>
+                <strong>{projectDraft.title.trim() || DEFAULT_PROJECT_TITLE}</strong>
+                <span>{projectDraft.folder.trim() || DEFAULT_PROJECT_FOLDER}</span>
+                <code>{formatTagsInput(parseTagsInput(projectDraft.tagsInput)) || '未设置标签'}</code>
+              </div>
+            </div>
+          )}
+
+          {presentationMode && (
+            <div className="presentation-bar">
+              <span>演示模式已开启，仅保留交互画布</span>
+              <div className="presentation-bar-actions">
+                <button type="button" className="banner-btn banner-btn-primary" onClick={handleRun}>
+                  重新运行
+                </button>
+                <button type="button" className="banner-btn banner-btn-secondary" onClick={handleExport}>
+                  导出 PNG
+                </button>
+                <button
+                  type="button"
+                  className="banner-btn banner-btn-secondary active"
+                  onClick={handleTogglePresentationMode}
+                >
+                  退出演示
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!presentationMode && isCompactLayout && (
             <div className="mobile-tabs" role="tablist" aria-label="移动端视图切换">
               <button
                 type="button"
@@ -1183,47 +2500,394 @@ const App = () => {
             </div>
           )}
 
-          {isPhoneLayout && (
+          {!presentationMode && isPhoneLayout && (
             <div className="mobile-readonly-note">
               手机端优先查看图形。需要拖拽点位时可以先解锁画布，完成后再同步回代码。
             </div>
           )}
 
 
-          <div className={`workspace ${isCompactLayout ? 'mobile-mode' : ''}`}>
-            <section className={`editor-section ${!isCompactLayout || activeTab === 'code' ? 'active' : ''}`}>
-              <div className="section-heading">
-                <div>
-                  <span className="section-kicker">Script Editor</span>
-                  <h2>代码编辑台</h2>
-                  <p>支持 UTF-8 中文注释、专用高亮主题与 Ctrl+Enter 快速运行。</p>
+          <div className={`workspace ${isCompactLayout ? 'mobile-mode' : ''} ${presentationMode ? 'presentation-active' : ''}`}>
+            {!presentationMode && (
+              <section className={`editor-section ${!isCompactLayout || activeTab === 'code' ? 'active' : ''}`}>
+                <div className="section-heading">
+                  <div>
+                    <span className="section-kicker">Script Editor</span>
+                    <h2>代码编辑台</h2>
+                    <p>支持 UTF-8 中文注释、专用高亮主题与 Ctrl+Enter 快速运行。</p>
+                  </div>
+                  <div className="section-meta">
+                    <span className="meta-pill">{populatedCodeLines} 行内容</span>
+                    <span className="meta-pill meta-pill-accent">{successRate} 成功率</span>
+                  </div>
                 </div>
-                <div className="section-meta">
-                  <span className="meta-pill">{populatedCodeLines} 行内容</span>
-                  <span className="meta-pill meta-pill-accent">{successRate} 成功率</span>
-                </div>
-              </div>
 
-              <CodeEditor
-                value={code}
-                onChange={setCode}
-                width="100%"
-                height={editorHeight}
-                language="geogebra"
-                theme="geogebra-workbench"
-              />
+                <div className="studio-grid">
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Project Space</span>
+                        <strong>项目空间</strong>
+                      </div>
+                      <span className="meta-pill meta-pill-neutral">
+                        {currentProject ? `已保存 ${savedProjects.length} 个项目` : '等待初始化'}
+                      </span>
+                    </div>
 
-              <div className="editor-tip-grid">
-                {editorNotes.map((note) => (
-                  <article key={note.title} className="micro-card">
-                    <strong>{note.title}</strong>
-                    <p>{note.description}</p>
+                    <div className="studio-field-grid">
+                      <label className="studio-field">
+                        <span>项目名称</span>
+                        <input
+                          type="text"
+                          value={projectDraft.title}
+                          onChange={(event) =>
+                            setProjectDraft((prev) => ({
+                              ...prev,
+                              title: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="studio-field">
+                        <span>文件夹</span>
+                        <input
+                          type="text"
+                          value={projectDraft.folder}
+                          onChange={(event) =>
+                            setProjectDraft((prev) => ({
+                              ...prev,
+                              folder: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    <label className="studio-field">
+                      <span>标签</span>
+                      <input
+                        type="text"
+                        value={projectDraft.tagsInput}
+                        onChange={(event) =>
+                          setProjectDraft((prev) => ({
+                            ...prev,
+                            tagsInput: event.target.value,
+                          }))
+                        }
+                        placeholder="例如：几何, 课堂, 动态"
+                      />
+                    </label>
+
+                    <label className="studio-check">
+                      <input
+                        type="checkbox"
+                        checked={projectDraft.isFavorite}
+                        onChange={(event) =>
+                          setProjectDraft((prev) => ({
+                            ...prev,
+                            isFavorite: event.target.checked,
+                          }))
+                        }
+                      />
+                      <span>加入收藏并优先显示</span>
+                    </label>
+
+                    <div className="studio-action-row">
+                      <button type="button" className="studio-btn studio-btn-primary" onClick={handleCreateProject}>
+                        新项目
+                      </button>
+                      <button type="button" className="studio-btn" onClick={handleSaveProject}>
+                        保存项目
+                      </button>
+                      <button type="button" className="studio-btn" onClick={handleSaveSnapshot}>
+                        保存快照
+                      </button>
+                      <button type="button" className="studio-btn" onClick={handleExportScriptFile}>
+                        导出脚本
+                      </button>
+                    </div>
+
+                    <div className="studio-list">
+                      {recentProjects.map((project) => (
+                        <button
+                          key={project.id}
+                          type="button"
+                          className={`studio-list-item ${project.id === currentProjectId ? 'active' : ''}`}
+                          onClick={() => loadProjectIntoEditor(project)}
+                        >
+                          <strong>{project.title}</strong>
+                          <span>{project.folder}</span>
+                          <small>{formatTagsInput(project.tags) || '未设置标签'}</small>
+                        </button>
+                      ))}
+                    </div>
                   </article>
-                ))}
-              </div>
-            </section>
 
-            <section className={`canvas-section ${!isCompactLayout || activeTab === 'canvas' ? 'active' : ''}`}>
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Version History</span>
+                        <strong>历史版本</strong>
+                      </div>
+                      <span className="meta-pill meta-pill-neutral">
+                        {currentProject?.versions?.length ?? 0} 个快照
+                      </span>
+                    </div>
+
+                    <div className="studio-action-row">
+                      <button
+                        type="button"
+                        className="studio-btn"
+                        onClick={handleUndoVersion}
+                        disabled={!currentProject?.versions?.length}
+                      >
+                        撤销快照
+                      </button>
+                      <button
+                        type="button"
+                        className="studio-btn"
+                        onClick={handleRedoVersion}
+                        disabled={versionCursor === -1}
+                      >
+                        重做快照
+                      </button>
+                    </div>
+
+                    <div className="version-list">
+                      {(currentProject?.versions ?? []).slice(0, 6).map((version, index) => (
+                        <article
+                          key={version.id}
+                          className={`version-item ${index === versionCursor ? 'active' : ''}`}
+                        >
+                          <div className="version-item-copy">
+                            <strong>{version.label}</strong>
+                            <span>{new Date(version.createdAt).toLocaleString('zh-CN')}</span>
+                          </div>
+                          <div className="version-item-actions">
+                            <button type="button" className="studio-inline-btn" onClick={() => handleCompareVersion(version)}>
+                              对比
+                            </button>
+                            <button
+                              type="button"
+                              className="studio-inline-btn"
+                              onClick={() => handleRollbackToVersion(version, index)}
+                            >
+                              回滚
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+
+                    {versionComparison && (
+                      <div className="version-compare">
+                        <strong>{versionComparison.version.label} 与当前脚本差异</strong>
+                        <p>
+                          修改 {versionComparison.summary.changedLines} 行，新增 {versionComparison.summary.addedLines} 行，
+                          删除 {versionComparison.summary.removedLines} 行。
+                        </p>
+                        <div className="diff-sample-list">
+                          {versionComparison.summary.changedSamples.map((sample) => (
+                            <div key={`${sample.lineNumber}-${sample.before}-${sample.after}`} className="diff-sample-item">
+                              <span>第 {sample.lineNumber} 行</span>
+                              <code>{sample.before ?? '∅'} → {sample.after ?? '∅'}</code>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </article>
+                </div>
+
+                <BackendPanel
+                  backendStatus={backendStatus}
+                  prompt={generationPrompt}
+                  onPromptChange={setGenerationPrompt}
+                  selectedFile={referenceFile}
+                  onFileChange={handleReferenceFileChange}
+                  onGenerate={handleGenerateFromBackend}
+                  onPublish={handlePublishShare}
+                  latestJobResult={latestJobResult}
+                  latestShare={latestShare}
+                  activeShareSlug={activeShareSlug}
+                  canPublish={canPublishShare}
+                  isGenerating={isGeneratingScript}
+                  isPublishing={isPublishingShare}
+                />
+
+                <AdminConsole
+                  backendStatus={backendStatus}
+                  adminDashboard={adminDashboard}
+                  adminState={adminState}
+                  onRefresh={() => {
+                    void refreshAdminDashboard();
+                  }}
+                  autoRefresh={isAdminAutoRefresh}
+                  onToggleAutoRefresh={() => setIsAdminAutoRefresh((prev) => !prev)}
+                />
+
+                <CodeEditor
+                  value={code}
+                  onChange={setCode}
+                  width="100%"
+                  height={editorHeight}
+                  language="geogebra"
+                  theme="geogebra-workbench"
+                />
+
+                <div className="studio-grid studio-grid-secondary">
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Parameter Panel</span>
+                        <strong>参数面板</strong>
+                      </div>
+                    </div>
+
+                    {parameterControls.length === 0 ? (
+                      <p className="studio-empty">
+                        当前脚本中还没有可直接映射成滑块、开关或输入框的简单变量。
+                      </p>
+                    ) : (
+                      <div className="parameter-list">
+                        {parameterControls.map((control) => (
+                          <div key={control.id} className="parameter-item">
+                            <div className="parameter-head">
+                              <strong>{control.name}</strong>
+                              <span>第 {control.lineNumber} 行</span>
+                            </div>
+
+                            {control.type === 'number' && (
+                              <div className="parameter-input-row">
+                                <input
+                                  type="range"
+                                  min={control.min}
+                                  max={control.max}
+                                  step={control.step}
+                                  value={Number(parameterValues[control.name] ?? control.value)}
+                                  onChange={(event) =>
+                                    handleParameterValueChange(control.name, Number.parseFloat(event.target.value))
+                                  }
+                                />
+                                <input
+                                  type="number"
+                                  value={Number(parameterValues[control.name] ?? control.value)}
+                                  onChange={(event) =>
+                                    handleParameterValueChange(control.name, Number.parseFloat(event.target.value))
+                                  }
+                                />
+                              </div>
+                            )}
+
+                            {control.type === 'boolean' && (
+                              <label className="studio-check">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(parameterValues[control.name] ?? control.value)}
+                                  onChange={(event) =>
+                                    handleParameterValueChange(control.name, event.target.checked)
+                                  }
+                                />
+                                <span>启用 {control.name}</span>
+                              </label>
+                            )}
+
+                            {control.type === 'string' && (
+                              <input
+                                type="text"
+                                className="studio-input"
+                                value={`${parameterValues[control.name] ?? control.value}`}
+                                onChange={(event) =>
+                                  handleParameterValueChange(control.name, event.target.value)
+                                }
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="studio-action-row">
+                      <button type="button" className="studio-btn" onClick={() => handleApplyParameters(false)}>
+                        应用参数
+                      </button>
+                      <button type="button" className="studio-btn studio-btn-primary" onClick={() => handleApplyParameters(true)}>
+                        应用并运行
+                      </button>
+                    </div>
+                  </article>
+
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Insights</span>
+                        <strong>智能标注与图形解释</strong>
+                      </div>
+                    </div>
+
+                    <div className="studio-action-row">
+                      <button
+                        type="button"
+                        className="studio-btn studio-btn-primary"
+                        onClick={handleGenerateInsights}
+                        disabled={isGeneratingInsights}
+                      >
+                        {isGeneratingInsights ? '生成中...' : '生成图形解读'}
+                      </button>
+                      <button
+                        type="button"
+                        className="studio-btn"
+                        onClick={handleAppendInsightComments}
+                        disabled={!scriptInsights}
+                      >
+                        写入脚本注释
+                      </button>
+                    </div>
+
+                    {scriptInsights ? (
+                      <div className="insight-block">
+                        <strong>{scriptInsights.summary}</strong>
+                        <div className="insight-list">
+                          {scriptInsights.keyPoints?.map((item) => (
+                            <p key={item}>关键点：{item}</p>
+                          ))}
+                          {scriptInsights.annotations?.map((item) => (
+                            <p key={item}>标注建议：{item}</p>
+                          ))}
+                          {scriptInsights.explanationSteps?.slice(0, 4).map((item) => (
+                            <p key={item}>步骤说明：{item}</p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="studio-empty">
+                        点击“生成图形解读”后，后端会基于当前指令返回概要、关键点和教学标注建议。
+                      </p>
+                    )}
+                  </article>
+
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Editor Notes</span>
+                        <strong>编辑说明</strong>
+                      </div>
+                    </div>
+
+                    <div className="editor-tip-grid compact">
+                      {editorNotes.map((note) => (
+                        <article key={note.title} className="micro-card">
+                          <strong>{note.title}</strong>
+                          <p>{note.description}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+                </div>
+              </section>
+            )}
+
+            <section className={`canvas-section ${presentationMode || !isCompactLayout || activeTab === 'canvas' ? 'active' : ''}`}>
               <div className="section-heading">
                 <div>
                   <span className="section-kicker">Live Canvas</span>
@@ -1238,44 +2902,88 @@ const App = () => {
                 </div>
               </div>
 
-              <div className={`canvas-sync-banner ${canvasDrift.isDirty ? 'is-dirty' : ''}`}>
-                <div className="canvas-sync-copy">
-                  <span className="canvas-sync-eyebrow">
-                    {canvasDrift.isDirty ? '待同步变更' : isCanvasLocked ? '受控模式' : '探索模式'}
-                  </span>
-                  <span className="canvas-sync-title">
-                    {canvasDrift.isDirty
-                      ? '画布上的自由点已经移动，当前代码与图形不再完全一致。'
-                      : isCanvasLocked
-                      ? '自由点拖拽已锁定，适合稳定复现脚本结果。'
-                      : '当前允许拖拽自由点，便于快速验证几何关系。'}
-                  </span>
-                  <span className="canvas-sync-meta">
-                    {canvasDrift.isDirty
-                      ? `变更对象：${canvasDrift.changedObjects.join(', ')}`
-                      : '如果拖拽后的结果需要保留，请点击“同步回代码”。'}
-                  </span>
-                </div>
+              {!presentationMode && (
+                <div className={`canvas-sync-banner ${canvasDrift.isDirty ? 'is-dirty' : ''}`}>
+                  <div className="canvas-sync-copy">
+                    <span className="canvas-sync-eyebrow">
+                      {canvasDrift.isDirty ? '待同步变更' : isCanvasLocked ? '受控模式' : '探索模式'}
+                    </span>
+                    <span className="canvas-sync-title">
+                      {canvasDrift.isDirty
+                        ? '画布上的自由点已经移动，当前代码与图形不再完全一致。'
+                        : isCanvasLocked
+                        ? '自由点拖拽已锁定，适合稳定复现脚本结果。'
+                        : '当前允许拖拽自由点，便于快速验证几何关系。'}
+                    </span>
+                    <span className="canvas-sync-meta">
+                      {canvasDrift.isDirty
+                        ? `变更对象：${canvasDrift.changedObjects.join(', ')}`
+                        : '如果拖拽后的结果需要保留，请点击“同步回代码”。'}
+                    </span>
+                    {driftHasConflict && (
+                      <span className="canvas-sync-warning">
+                        拖拽发生后你又修改过脚本，回写会覆盖对应点位定义。
+                      </span>
+                    )}
+                  </div>
 
-                <div className="canvas-sync-actions">
-                  {canvasDrift.isDirty && (
+                  <div className="canvas-sync-actions">
+                    {canvasDrift.isDirty && (
+                      <button
+                        type="button"
+                        className="banner-btn banner-btn-primary"
+                        onClick={handleSyncSelectedCanvasState}
+                      >
+                        同步选中对象
+                      </button>
+                    )}
+                    {canvasDrift.isDirty && (
+                      <button
+                        type="button"
+                        className="banner-btn banner-btn-secondary"
+                        onClick={handleDiscardCanvasDrift}
+                      >
+                        忽略拖拽
+                      </button>
+                    )}
                     <button
                       type="button"
-                      className="banner-btn banner-btn-primary"
-                      onClick={handleExportCanvasState}
+                      className={`banner-btn banner-btn-secondary ${isCanvasLocked ? 'active' : ''}`}
+                      onClick={handleToggleCanvasLock}
                     >
-                      同步回代码
+                      {isCanvasLocked ? '解锁拖拽' : '锁定点拖拽'}
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className={`banner-btn banner-btn-secondary ${isCanvasLocked ? 'active' : ''}`}
-                    onClick={handleToggleCanvasLock}
-                  >
-                    {isCanvasLocked ? '解锁拖拽' : '锁定点拖拽'}
-                  </button>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {!presentationMode && canvasDrift.isDirty && (
+                <article className={`studio-card drift-card ${driftHasConflict ? 'is-conflict' : ''}`}>
+                  <div className="studio-card-head">
+                    <div>
+                      <span className="card-kicker">Canvas Drift</span>
+                      <strong>拖拽回写增强</strong>
+                    </div>
+                  </div>
+
+                  <div className="drift-list">
+                    {pointDiffs.map((diff) => (
+                      <label key={diff.name} className="drift-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedDriftNames.includes(diff.name)}
+                          onChange={() => handleToggleDriftName(diff.name)}
+                        />
+                        <div className="drift-item-copy">
+                          <strong>{diff.name}</strong>
+                          <span>{diff.lineNumber ? `原第 ${diff.lineNumber} 行` : '新增自由点'}</span>
+                          <code>{diff.beforeCommand ?? '未在脚本中定义'} → {diff.afterCommand}</code>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </article>
+              )}
 
               <GeoGebraContainer
                 key={selectedCanvasMode.id}
@@ -1284,24 +2992,221 @@ const App = () => {
                 canvasMode={selectedCanvasMode}
               />
 
-              <ControlPanel
-                onRun={handleRun}
-                onClear={handleClear}
-                onExport={handleExport}
-                onReset={handleReset}
-                canvasModes={CANVAS_MODES}
-                selectedCanvasModeId={selectedCanvasModeId}
-                onCanvasModeChange={handleCanvasModeChange}
-                isExecuting={isExecuting}
-                executionStats={executionStats}
-              />
+              {!presentationMode && (
+                <ControlPanel
+                  onRun={handleRun}
+                  onClear={handleClear}
+                  onExport={handleExport}
+                  onReset={handleReset}
+                  canvasModes={CANVAS_MODES}
+                  selectedCanvasModeId={selectedCanvasModeId}
+                  onCanvasModeChange={handleCanvasModeChange}
+                  isExecuting={isExecuting}
+                  executionStats={executionStats}
+                />
+              )}
 
-              <LogPanel
-                logs={logs}
-                errors={errors}
-                isExecuting={isExecuting}
-                executionStats={executionStats}
-              />
+              {!presentationMode && (
+                <div className="studio-grid studio-grid-secondary">
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Style Batch</span>
+                        <strong>批量样式</strong>
+                      </div>
+                    </div>
+
+                    <div className="style-grid">
+                      <label className="studio-field">
+                        <span>颜色</span>
+                        <input
+                          type="color"
+                          value={styleDraft.color}
+                          onChange={(event) =>
+                            setStyleDraft((prev) => ({
+                              ...prev,
+                              color: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="studio-field">
+                        <span>线宽</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="13"
+                          value={styleDraft.lineThickness}
+                          onChange={(event) =>
+                            setStyleDraft((prev) => ({
+                              ...prev,
+                              lineThickness: Number.parseInt(event.target.value, 10) || 1,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="studio-field">
+                        <span>点大小</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="12"
+                          value={styleDraft.pointSize}
+                          onChange={(event) =>
+                            setStyleDraft((prev) => ({
+                              ...prev,
+                              pointSize: Number.parseInt(event.target.value, 10) || 1,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    <div className="studio-toggle-grid">
+                      <label className="studio-check">
+                        <input
+                          type="checkbox"
+                          checked={styleDraft.labelVisible}
+                          onChange={(event) =>
+                            setStyleDraft((prev) => ({
+                              ...prev,
+                              labelVisible: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>显示标签</span>
+                      </label>
+                      <label className="studio-check">
+                        <input
+                          type="checkbox"
+                          checked={styleDraft.showGrid}
+                          onChange={(event) =>
+                            setStyleDraft((prev) => ({
+                              ...prev,
+                              showGrid: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>显示网格</span>
+                      </label>
+                      <label className="studio-check">
+                        <input
+                          type="checkbox"
+                          checked={styleDraft.showAxes}
+                          onChange={(event) =>
+                            setStyleDraft((prev) => ({
+                              ...prev,
+                              showAxes: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>显示坐标轴</span>
+                      </label>
+                    </div>
+
+                    <div className="scope-switch">
+                      <button
+                        type="button"
+                        className={`studio-inline-btn ${styleDraft.scope === 'all' ? 'active' : ''}`}
+                        onClick={() =>
+                          setStyleDraft((prev) => ({
+                            ...prev,
+                            scope: 'all',
+                          }))
+                        }
+                      >
+                        全部对象
+                      </button>
+                      <button
+                        type="button"
+                        className={`studio-inline-btn ${styleDraft.scope === 'selected' ? 'active' : ''}`}
+                        onClick={() =>
+                          setStyleDraft((prev) => ({
+                            ...prev,
+                            scope: 'selected',
+                          }))
+                        }
+                      >
+                        选中对象
+                      </button>
+                    </div>
+
+                    {styleDraft.scope === 'selected' && (
+                      <div className="object-chip-grid">
+                        {availableObjectNames.map((objectName) => (
+                          <button
+                            key={objectName}
+                            type="button"
+                            className={`object-chip ${selectedStyleNames.includes(objectName) ? 'active' : ''}`}
+                            onClick={() => handleToggleStyleObjectName(objectName)}
+                          >
+                            {objectName}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="studio-action-row">
+                      <button type="button" className="studio-btn studio-btn-primary" onClick={handleApplyStyles}>
+                        应用到画布
+                      </button>
+                    </div>
+                  </article>
+
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Lecture & Presentation</span>
+                        <strong>讲解模式与演示模式</strong>
+                      </div>
+                    </div>
+
+                    <p className="studio-empty">
+                      讲解模式会按命令顺序逐步重建图形，适合课堂演示和录屏讲解；演示模式会隐藏代码区，只保留画布和最少控制。
+                    </p>
+
+                    <div className="lecture-metrics">
+                      <span className="meta-pill meta-pill-neutral">
+                        讲解进度 {lectureState.currentStep}/{lectureState.commands.length}
+                      </span>
+                      <span className={`meta-pill ${lectureState.isPlaying ? 'meta-pill-accent' : 'meta-pill-neutral'}`}>
+                        {lectureState.isPlaying ? '自动播放中' : '等待讲解'}
+                      </span>
+                    </div>
+
+                    <div className="studio-action-row">
+                      <button type="button" className="studio-btn" onClick={handlePrepareLecture}>
+                        准备讲解
+                      </button>
+                      <button type="button" className="studio-btn" onClick={handlePreviousLectureStep}>
+                        上一步
+                      </button>
+                      <button type="button" className="studio-btn" onClick={handleNextLectureStep}>
+                        下一步
+                      </button>
+                      <button
+                        type="button"
+                        className="studio-btn studio-btn-primary"
+                        onClick={lectureState.isPlaying ? handleStopLecture : handleAutoPlayLecture}
+                      >
+                        {lectureState.isPlaying ? '停止播放' : '自动播放'}
+                      </button>
+                      <button type="button" className="studio-btn" onClick={handleTogglePresentationMode}>
+                        开启演示模式
+                      </button>
+                    </div>
+                  </article>
+                </div>
+              )}
+
+              {!presentationMode && (
+                <LogPanel
+                  logs={logs}
+                  errors={errors}
+                  isExecuting={isExecuting}
+                  executionStats={executionStats}
+                />
+              )}
             </section>
           </div>
         </main>

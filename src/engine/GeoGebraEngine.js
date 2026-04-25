@@ -500,6 +500,138 @@ class GeoGebraEngine {
   }
 
   /**
+   * 批量更新对象样式
+   * @param {object} options
+   * @param {string[]} options.objectNames - 目标对象
+   * @param {string} [options.color] - 十六进制颜色
+   * @param {number} [options.lineThickness] - 线宽
+   * @param {number} [options.pointSize] - 点大小
+   * @param {boolean} [options.labelVisible] - 是否显示标签
+   * @returns {{updatedCount: number, attemptedCount: number}}
+   */
+  applyObjectStyles(options = {}) {
+    if (!this.isReady || !this.applet) {
+      return {
+        updatedCount: 0,
+        attemptedCount: 0,
+      };
+    }
+
+    const {
+      objectNames = this.getAllObjectNames(),
+      color,
+      lineThickness,
+      pointSize,
+      labelVisible,
+    } = options;
+
+    const targets = Array.isArray(objectNames) ? objectNames.filter(Boolean) : [];
+    let updatedCount = 0;
+
+    targets.forEach((objectName) => {
+      let didUpdate = false;
+
+      try {
+        if (typeof color === 'string' && typeof this.applet.setColor === 'function') {
+          const rgb = this.hexToRgb(color);
+          if (rgb) {
+            this.applet.setColor(objectName, rgb.r, rgb.g, rgb.b);
+            didUpdate = true;
+          }
+        }
+
+        if (
+          typeof lineThickness === 'number'
+          && Number.isFinite(lineThickness)
+          && typeof this.applet.setLineThickness === 'function'
+        ) {
+          this.applet.setLineThickness(objectName, Math.max(1, Math.round(lineThickness)));
+          didUpdate = true;
+        }
+
+        if (
+          typeof pointSize === 'number'
+          && Number.isFinite(pointSize)
+          && typeof this.applet.setPointSize === 'function'
+        ) {
+          this.applet.setPointSize(objectName, Math.max(1, Math.round(pointSize)));
+          didUpdate = true;
+        }
+
+        if (typeof labelVisible === 'boolean' && typeof this.applet.setLabelVisible === 'function') {
+          this.applet.setLabelVisible(objectName, labelVisible);
+          didUpdate = true;
+        }
+
+        if (didUpdate) {
+          updatedCount++;
+        }
+      } catch (error) {
+        console.warn(`更新对象样式失败: ${objectName}`, error);
+      }
+    });
+
+    return {
+      updatedCount,
+      attemptedCount: targets.length,
+    };
+  }
+
+  /**
+   * 控制网格显示
+   * @param {boolean} isVisible
+   * @returns {boolean}
+   */
+  setGridVisible(isVisible) {
+    if (!this.isReady || !this.applet) {
+      return false;
+    }
+
+    try {
+      if (typeof this.applet.showGrid === 'function') {
+        this.applet.showGrid(Boolean(isVisible));
+        return true;
+      }
+
+      if (typeof this.applet.setGridVisible === 'function') {
+        this.applet.setGridVisible(Boolean(isVisible));
+        return true;
+      }
+    } catch (error) {
+      console.warn('更新网格状态失败', error);
+    }
+
+    return false;
+  }
+
+  /**
+   * 控制坐标轴显示
+   * @param {boolean} isVisible
+   * @returns {boolean}
+   */
+  setAxesVisible(isVisible) {
+    if (!this.isReady || !this.applet) {
+      return false;
+    }
+
+    try {
+      if (typeof this.applet.setAxesVisible === 'function') {
+        this.applet.setAxesVisible(Boolean(isVisible), Boolean(isVisible));
+        return true;
+      }
+
+      if (typeof this.applet.showAxes === 'function') {
+        this.applet.showAxes(Boolean(isVisible), Boolean(isVisible));
+        return true;
+      }
+    } catch (error) {
+      console.warn('更新坐标轴状态失败', error);
+    }
+
+    return false;
+  }
+
+  /**
    * 注册对象变化监听器
    * @param {function} listener - 监听器回调函数
    * @returns {function}
@@ -700,6 +832,28 @@ class GeoGebraEngine {
   formatNumber(value) {
     const rounded = Number.parseFloat(Number(value).toFixed(6));
     return Object.is(rounded, -0) ? 0 : rounded;
+  }
+
+  /**
+   * 把十六进制颜色转换成 RGB，供 GeoGebra API 使用
+   * @param {string} hex
+   * @returns {{r: number, g: number, b: number}|null}
+   */
+  hexToRgb(hex) {
+    if (typeof hex !== 'string') {
+      return null;
+    }
+
+    const normalized = hex.trim().replace('#', '');
+    if (!/^[0-9a-f]{6}$/i.test(normalized)) {
+      return null;
+    }
+
+    return {
+      r: Number.parseInt(normalized.slice(0, 2), 16),
+      g: Number.parseInt(normalized.slice(2, 4), 16),
+      b: Number.parseInt(normalized.slice(4, 6), 16),
+    };
   }
 
   /**

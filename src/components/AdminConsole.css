@@ -1,0 +1,404 @@
+.admin-console {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px;
+  border: 1px solid rgba(210, 210, 215, 0.88);
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at top right, rgba(0, 113, 227, 0.08), transparent 28%),
+    linear-gradient(180deg, #ffffff 0%, #f7f8fb 100%);
+}
+
+.admin-console-head,
+.admin-console-actions,
+.admin-console-toolbar,
+.admin-console-card-head {
+  display: flex;
+}
+
+.admin-console-head {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-console-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 760px;
+}
+
+.admin-console-copy h3 {
+  font-family: var(--display-font);
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.04;
+  letter-spacing: -0.04em;
+  color: #111111;
+}
+
+.admin-console-copy p,
+.admin-console-empty,
+.admin-console-table small {
+  color: #6e6e73;
+  line-height: 1.6;
+}
+
+.admin-console-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 210, 215, 0.88);
+  background: rgba(255, 255, 255, 0.76);
+  color: #6e6e73;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.admin-console-actions {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  min-width: min(100%, 360px);
+}
+
+.admin-console-status {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+}
+
+.admin-console-status strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.admin-console-status span {
+  font-size: 13px;
+}
+
+.admin-console-status-ready {
+  background: rgba(104, 194, 132, 0.1);
+  border-color: rgba(104, 194, 132, 0.16);
+  color: #276738;
+}
+
+.admin-console-status-error {
+  background: rgba(214, 92, 92, 0.08);
+  border-color: rgba(214, 92, 92, 0.14);
+  color: #9f2f2f;
+}
+
+.admin-console-status-loading {
+  background: #f5f5f7;
+  border-color: rgba(210, 210, 215, 0.88);
+  color: #424245;
+}
+
+.admin-console-toolbar {
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-console-toggle,
+.admin-console-button,
+.admin-console-mini-pill,
+.admin-console-chip {
+  display: inline-flex;
+  align-items: center;
+}
+
+.admin-console-toggle {
+  gap: 10px;
+  color: #424245;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.admin-console-button {
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 113, 227, 0.18);
+  background: #0071e3;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  transition:
+    transform 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.admin-console-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: #0066cc;
+}
+
+.admin-console-button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.admin-console-summary-grid,
+.admin-console-grid,
+.admin-console-definition-grid {
+  display: grid;
+}
+
+.admin-console-summary-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-console-summary-card,
+.admin-console-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 24px;
+  border: 1px solid rgba(210, 210, 215, 0.88);
+}
+
+.admin-console-summary-card {
+  background: #ffffff;
+}
+
+.admin-console-summary-card span,
+.admin-console-definition-grid span,
+.admin-console-bucket-item span {
+  color: #6e6e73;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.admin-console-summary-card strong,
+.admin-console-card strong,
+.admin-console-definition-grid strong {
+  color: #1d1d1f;
+}
+
+.admin-console-summary-card strong {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.admin-console-summary-card small {
+  color: #6e6e73;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.admin-console-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-console-card {
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.admin-console-card-head {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-console-card-head strong {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.admin-console-mini-pill,
+.admin-console-chip {
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 210, 215, 0.88);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-console-mini-pill {
+  background: #f5f5f7;
+  color: #424245;
+}
+
+.admin-console-chip-success {
+  background: rgba(104, 194, 132, 0.12);
+  border-color: rgba(104, 194, 132, 0.18);
+  color: #276738;
+}
+
+.admin-console-chip-warning {
+  background: rgba(255, 200, 87, 0.16);
+  border-color: rgba(255, 200, 87, 0.24);
+  color: #986800;
+}
+
+.admin-console-chip-danger {
+  background: rgba(214, 92, 92, 0.1);
+  border-color: rgba(214, 92, 92, 0.16);
+  color: #9f2f2f;
+}
+
+.admin-console-chip-neutral {
+  background: #f5f5f7;
+  color: #424245;
+}
+
+.admin-console-definition-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-console-definition-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 92px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: #f5f5f7;
+  border: 1px solid rgba(210, 210, 215, 0.88);
+}
+
+.admin-console-definition-grid strong {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.admin-console-definition-grid-compact > div {
+  min-height: 78px;
+}
+
+.admin-console-table-card {
+  gap: 16px;
+}
+
+.admin-console-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-console-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 560px;
+}
+
+.admin-console-table th,
+.admin-console-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid rgba(210, 210, 215, 0.72);
+  text-align: left;
+  vertical-align: top;
+}
+
+.admin-console-table th {
+  color: #6e6e73;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.admin-console-table td {
+  color: #1d1d1f;
+  font-size: 13px;
+}
+
+.admin-console-table td strong,
+.admin-console-table td small {
+  display: block;
+}
+
+.admin-console-bucket-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-console-bucket-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 16px;
+  background: #f5f5f7;
+  border: 1px solid rgba(210, 210, 215, 0.88);
+}
+
+.admin-console-bucket-item strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.admin-console-grid-metrics,
+.admin-console-grid-activity {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 1280px) {
+  .admin-console-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  .admin-console-head,
+  .admin-console-grid,
+  .admin-console-definition-grid,
+  .admin-console-summary-grid,
+  .admin-console-bucket-list {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-console-head {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .admin-console-actions {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .admin-console-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-console-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .admin-console {
+    padding: 18px;
+    border-radius: 24px;
+  }
+
+  .admin-console-copy h3 {
+    font-size: 26px;
+  }
+}

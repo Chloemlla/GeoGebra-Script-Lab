@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
+    image: geograba:local
+    environment:
+      BIND_ADDR: 0.0.0.0:8080
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:8080}
+      FRONTEND_DIST_DIR: /app/frontend-dist
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-geograba}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.openai.com/v1}
+      MODEL_NAME: ${MODEL_NAME:-gpt-4.1-mini}
+      API_KEY: ${API_KEY:-}
+    depends_on:
+      - mongo
+    ports:
+      - "8080:8080"
+
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:

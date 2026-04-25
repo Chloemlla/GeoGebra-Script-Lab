@@ -1,0 +1,14 @@
+.git
+.github
+node_modules
+dist
+build
+coverage
+.cache
+.vscode
+.idea
+.DS_Store
+.env
+.env.*
+*.log
+backend/target
