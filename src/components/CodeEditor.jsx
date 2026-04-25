@@ -1,5 +1,10 @@
 import React, { useEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor';
+import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
+import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import './CodeEditor.css';
 
 const toCssSize = (value) => (typeof value === 'number' ? `${value}px` : value);
@@ -7,36 +12,24 @@ const DEFAULT_EDITOR_VALUE = '// 在这里输入 GeoGebra 指令\n';
 
 let isMonacoConfigured = false;
 
-const resolveMonacoWorkerUrl = (label) => {
-  if (label === 'json') {
-    return 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/language/json/json.worker.js';
-  }
-  if (label === 'css' || label === 'scss' || label === 'less') {
-    return 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/language/css/css.worker.js';
-  }
-  if (label === 'html' || label === 'handlebars' || label === 'razor') {
-    return 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/language/html/html.worker.js';
-  }
-  if (label === 'typescript' || label === 'javascript') {
-    return 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/language/typescript/ts.worker.js';
-  }
-
-  return 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/editor/editor.worker.js';
-};
-
 const createMonacoWorker = (label) => {
-  const workerUrl = resolveMonacoWorkerUrl(label);
-  const blob = new Blob(
-    [`importScripts(${JSON.stringify(workerUrl)});`],
-    { type: 'application/javascript' }
-  );
-  const blobUrl = URL.createObjectURL(blob);
-  const worker = new Worker(blobUrl, { name: `monaco-${label || 'editor'}` });
+  if (label === 'json') {
+    return new jsonWorker();
+  }
 
-  // Worker 已经拿到 blob 内容后即可释放 URL，避免不断创建临时对象 URL。
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+  if (label === 'css' || label === 'scss' || label === 'less') {
+    return new cssWorker();
+  }
 
-  return worker;
+  if (label === 'html' || label === 'handlebars' || label === 'razor') {
+    return new htmlWorker();
+  }
+
+  if (label === 'typescript' || label === 'javascript') {
+    return new tsWorker();
+  }
+
+  return new editorWorker();
 };
 
 const ensureMonacoConfiguration = () => {
