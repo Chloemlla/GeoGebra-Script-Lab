@@ -257,12 +257,6 @@ struct ModelClient {
 }
 
 impl ModelClient {
-    fn main() {
-        // 加载 .env 文件
-        dotenv().ok();
-        println!("Environment variables loaded from .env file");
-    }
-
     fn new(base_url: String, model_name: String, api_key: String) -> Result<Self, AppError> {
         let base_url = Url::parse(&base_url)
             .map_err(|err| AppError::BadRequest(format!("invalid model base URL: {err}")))?;
