@@ -3652,6 +3652,22 @@ const App = () => {
                       >
                         写入脚本注释
                       </button>
+                      <button
+                        type="button"
+                        className="studio-btn"
+                        onClick={handleGenerateAnnotations}
+                        disabled={isGeneratingAnnotations}
+                      >
+                        {isGeneratingAnnotations ? '标注生成中...' : '对象级标注'}
+                      </button>
+                      <button
+                        type="button"
+                        className="studio-btn"
+                        onClick={handleGenerateObjectExplanations}
+                        disabled={isGeneratingObjectExplanations}
+                      >
+                        {isGeneratingObjectExplanations ? '解释生成中...' : '对象依赖解释'}
+                      </button>
                     </div>
 
                     {scriptInsights ? (
@@ -3667,12 +3683,58 @@ const App = () => {
                           {scriptInsights.explanationSteps?.slice(0, 4).map((item) => (
                             <p key={item}>步骤说明：{item}</p>
                           ))}
+                          {scriptInsights.teachingScript?.slice(0, 3).map((item) => (
+                            <p key={item}>讲稿：{item}</p>
+                          ))}
                         </div>
                       </div>
                     ) : (
                       <p className="studio-empty">
                         点击“生成图形解读”后，后端会基于当前指令返回概要、关键点和教学标注建议。
                       </p>
+                    )}
+
+                    {annotationJobResult && (
+                      <div className="insight-block">
+                        <strong>{annotationJobResult.summary}</strong>
+                        <div className="annotation-list">
+                          {annotationJobResult.annotations?.map((annotation) => (
+                            <label key={annotation.id} className="drift-item">
+                              <input
+                                type="checkbox"
+                                checked={selectedAnnotationIds.includes(annotation.id)}
+                                onChange={() => handleToggleAnnotationSelection(annotation.id)}
+                              />
+                              <div className="drift-item-copy">
+                                <strong>{annotation.label}</strong>
+                                <span>{annotation.relatedObjects?.join(', ') || '无关联对象'}</span>
+                                <code>{annotation.suggestedCommand}</code>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                        <div className="studio-action-row">
+                          <button type="button" className="studio-btn studio-btn-primary" onClick={handleApplySelectedAnnotations}>
+                            回写选中标注
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {objectExplanationResult && (
+                      <div className="insight-block">
+                        <strong>{objectExplanationResult.summary}</strong>
+                        <div className="insight-list">
+                          {objectExplanationResult.objects?.map((item) => (
+                            <p key={`${item.name}-${item.sourceCommand}`}>
+                              {item.name}：依赖 {item.dependsOn?.join(', ') || '无'}，{item.reason}
+                            </p>
+                          ))}
+                          {objectExplanationResult.teachingScript?.slice(0, 4).map((item) => (
+                            <p key={item}>讲稿：{item}</p>
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </article>
 
@@ -4005,6 +4067,125 @@ const App = () => {
                         开启演示模式
                       </button>
                     </div>
+                  </article>
+
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Export Matrix</span>
+                        <strong>导出矩阵高级版</strong>
+                      </div>
+                    </div>
+
+                    <div className="style-grid">
+                      <label className="studio-field">
+                        <span>格式</span>
+                        <select
+                          className="studio-input"
+                          value={exportDraft.format}
+                          onChange={(event) =>
+                            setExportDraft((prev) => ({
+                              ...prev,
+                              format: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="svg">SVG</option>
+                          <option value="pdf">PDF Spec</option>
+                          <option value="gif">GIF Job</option>
+                          <option value="mp4">MP4 Job</option>
+                          <option value="pptx">PPTX Job</option>
+                          <option value="ggb">GGB Bundle</option>
+                        </select>
+                      </label>
+                      <label className="studio-field">
+                        <span>宽度</span>
+                        <input
+                          type="number"
+                          value={exportDraft.width}
+                          onChange={(event) =>
+                            setExportDraft((prev) => ({
+                              ...prev,
+                              width: Number.parseInt(event.target.value, 10) || 1280,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="studio-field">
+                        <span>高度</span>
+                        <input
+                          type="number"
+                          value={exportDraft.height}
+                          onChange={(event) =>
+                            setExportDraft((prev) => ({
+                              ...prev,
+                              height: Number.parseInt(event.target.value, 10) || 720,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    <div className="studio-toggle-grid">
+                      <label className="studio-check">
+                        <input
+                          type="checkbox"
+                          checked={exportDraft.includeGrid}
+                          onChange={(event) =>
+                            setExportDraft((prev) => ({
+                              ...prev,
+                              includeGrid: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>包含网格</span>
+                      </label>
+                      <label className="studio-check">
+                        <input
+                          type="checkbox"
+                          checked={exportDraft.includeAxes}
+                          onChange={(event) =>
+                            setExportDraft((prev) => ({
+                              ...prev,
+                              includeAxes: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>包含坐标轴</span>
+                      </label>
+                    </div>
+
+                    <div className="studio-action-row">
+                      <button
+                        type="button"
+                        className="studio-btn studio-btn-primary"
+                        onClick={handleCreateExportMatrixJob}
+                        disabled={isCreatingExportJob}
+                      >
+                        {isCreatingExportJob ? '导出中...' : '创建导出任务'}
+                      </button>
+                      {latestExportJob && (
+                        <a
+                          className="studio-btn"
+                          href={buildExportDownloadUrl(latestExportJob.exportJobId)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          下载结果
+                        </a>
+                      )}
+                    </div>
+
+                    {latestExportJob && (
+                      <div className="insight-block">
+                        <strong>{latestExportJob.title}</strong>
+                        <div className="insight-list">
+                          <p>格式：{latestExportJob.format}</p>
+                          <p>状态：{latestExportJob.status}</p>
+                          <p>文件：{latestExportJob.downloadName}</p>
+                        </div>
+                      </div>
+                    )}
                   </article>
                 </div>
               )}

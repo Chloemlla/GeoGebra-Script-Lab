@@ -824,11 +824,31 @@
     color 0.22s ease;
 }
 
+.cloud-sync-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(210, 210, 215, 0.88);
+  background: #f5f5f7;
+}
+
+.cloud-sync-panel small {
+  color: #6e6e73;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 .studio-btn:hover,
 .studio-inline-btn:hover,
 .studio-list-item:hover,
 .object-chip:hover {
   transform: translateY(-1px);
+}
+
+a.studio-btn {
+  text-decoration: none;
 }
 
 .studio-btn-primary {
@@ -848,6 +868,7 @@
 .version-list,
 .parameter-list,
 .drift-list,
+.annotation-list,
 .insight-list,
 .diff-sample-list {
   display: flex;
