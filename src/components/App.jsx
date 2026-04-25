@@ -19,21 +19,33 @@ import GeoGebraEngine from '../engine/GeoGebraEngine';
 import Preprocessor from '../engine/Preprocessor';
 import Dispatcher from '../engine/Dispatcher';
 import {
+  buildExportDownloadUrl,
+  createAnnotationJob,
   clearAuthToken,
   createDrawingJob,
+  createExportJob,
+  createObjectExplanations,
+  createProject,
+  createProjectVersion,
   createScriptInsights,
   createShare,
   fetchAdminDashboard,
   fetchHealth,
   fetchCurrentUser,
   fetchModelConfig,
+  fetchProject,
+  fetchExportJob,
   fetchShare,
+  getWorkspaceKey,
+  listProjects,
+  listProjectVersions,
   loginUser,
   logoutUser,
   pollDrawingJob,
   reserveUpload,
   registerUser,
   setAuthToken,
+  updateProject,
   uploadAsset,
 } from '../api/backend';
 import {
