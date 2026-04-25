@@ -1,0 +1,313 @@
+.geogebra-shell {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(210, 210, 215, 0.88);
+  border-radius: 30px;
+  background: #ffffff;
+}
+
+.geogebra-topbar {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(29, 29, 31, 0.86);
+  color: #ffffff;
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+
+.geogebra-topbar-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.geogebra-topbar-tip {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+}
+
+.geogebra-stage {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfbfd 100%);
+}
+
+.geogebra-skeleton {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 16% 18%, rgba(0, 113, 227, 0.1), transparent 24%),
+    linear-gradient(180deg, #f7f8fb 0%, #f5f5f7 100%);
+  transition: opacity 0.24s ease, transform 0.24s ease;
+}
+
+.geogebra-skeleton.is-leaving {
+  opacity: 0;
+  transform: scale(1.01);
+}
+
+.skeleton-card {
+  position: relative;
+  z-index: 2;
+  width: min(420px, calc(100% - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid rgba(210, 210, 215, 0.88);
+  border-radius: 30px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.skeleton-line {
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(210, 210, 215, 0.34), rgba(210, 210, 215, 0.7), rgba(210, 210, 215, 0.34));
+  background-size: 200% 100%;
+  animation: skeleton-pulse 1.6s ease infinite;
+}
+
+.skeleton-line.short {
+  width: 32%;
+}
+
+.skeleton-line.medium {
+  width: 58%;
+}
+
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.skeleton-block {
+  height: 110px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(210, 210, 215, 0.46), rgba(245, 245, 247, 0.9));
+  animation: skeleton-pulse 1.6s ease infinite;
+}
+
+.skeleton-orbit {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(14px);
+}
+
+.orbit-one {
+  width: 180px;
+  height: 180px;
+  top: 16%;
+  left: 10%;
+  background: rgba(41, 151, 255, 0.12);
+}
+
+.orbit-two {
+  width: 220px;
+  height: 220px;
+  right: 6%;
+  bottom: 10%;
+  background: rgba(210, 210, 215, 0.32);
+}
+
+@keyframes skeleton-pulse {
+  0% {
+    background-position: 200% 0;
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    background-position: -200% 0;
+    opacity: 0.7;
+  }
+}
+
+.loading-progress {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 22px;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(210, 210, 215, 0.72);
+}
+
+.progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0071e3 0%, #2997ff 100%);
+  transition: width 0.3s ease;
+}
+
+.loading-text {
+  position: absolute;
+  bottom: 46px;
+  left: 24px;
+  right: 24px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.loading-text p {
+  color: #1d1d1f;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.loading-hint {
+  color: #6e6e73 !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+}
+
+.geogebra-error {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px;
+  text-align: center;
+  background: linear-gradient(180deg, #fff8f8 0%, #ffffff 100%);
+}
+
+.error-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 22px;
+  background: rgba(214, 92, 92, 0.12);
+  color: #9f2f2f;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.error-icon-image {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+
+.error-title {
+  font-family: var(--display-font);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: #7d2525;
+}
+
+.error-message {
+  max-width: 520px;
+  color: #9f2f2f;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.error-hint {
+  max-width: 560px;
+  color: #b15b5b;
+  line-height: 1.6;
+}
+
+.error-retry-btn {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: #1d1d1f;
+  color: #ffffff;
+  font-weight: 600;
+  transition:
+    background-color 0.22s ease,
+    transform 0.22s ease;
+}
+
+.error-retry-btn:hover {
+  background: #000000;
+  transform: translateY(-1px);
+}
+
+.geogebra-ready-hint {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 4;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 20px;
+  background: rgba(29, 29, 31, 0.84);
+  color: #ffffff;
+  backdrop-filter: blur(12px);
+}
+
+.geogebra-ready-hint span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.geogebra-ready-hint small {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  .geogebra-shell {
+    border-radius: 24px;
+  }
+
+  .geogebra-topbar {
+    top: 14px;
+    left: 14px;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .geogebra-topbar-tip {
+    display: none;
+  }
+
+  .skeleton-card {
+    width: calc(100% - 28px);
+    padding: 22px;
+  }
+
+  .skeleton-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .geogebra-topbar,
+  .geogebra-ready-hint {
+    border-radius: 16px;
+  }
+
+  .loading-text {
+    left: 18px;
+    right: 18px;
+  }
+}

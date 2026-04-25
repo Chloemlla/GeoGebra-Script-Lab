@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="./icon/icon.png">
+    <link rel="shortcut icon" type="image/png" href="./icon/icon.png">
+    <link rel="apple-touch-icon" href="./icon/icon.png">
+    <meta name="theme-color" content="#163fa4">
+    <meta
+        name="description"
+        content="GeoGebra 交互式绘图工作台，支持脚本编辑、实时画布、自由点同步回写与结果导出。"
+    >
+    <title>GeoGebra 几何脚本工作台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Avenir Next', 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+                'Microsoft YaHei', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background: #f7f1e6;
+        }
+        
+        #root {
+            width: 100%;
+            min-height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.jsx"></script>
+    <!-- GeoGebra 官方 API -->
+    <script src="https://www.geogebra.org/apps/deployggb.js"></script>
+</body>
+</html>

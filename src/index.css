@@ -1,0 +1,136 @@
+:root {
+  --display-font: 'SF Pro Display', 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --text-font: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --code-font: 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', 'Fira Code', monospace;
+  --black: #000000;
+  --ink: #1d1d1f;
+  --gray: #f5f5f7;
+  --white: #ffffff;
+  --blue: #0071e3;
+  --blue-strong: #0066cc;
+  --blue-bright: #2997ff;
+  --text-secondary: #6e6e73;
+  --border-soft: #d2d2d7;
+  --border-mid: #86868b;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  font-family: var(--text-font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, #0a0a0a 0, #0a0a0a 220px, #f5f5f7 220px, #f5f5f7 58%, #ffffff 58%, #ffffff 100%);
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(0, 113, 227, 0.2);
+  color: var(--ink);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid rgba(0, 113, 227, 0.36);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--blue-strong);
+  text-decoration: none;
+}
+
+code,
+pre {
+  font-family: var(--code-font);
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.app-icon-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type='number'] {
+  -moz-appearance: textfield;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(210, 210, 215, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(110, 110, 115, 0.45);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(110, 110, 115, 0.62);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(110, 110, 115, 0.45) rgba(210, 210, 215, 0.5);
+}
+
+@media print {
+  body {
+    background: #ffffff;
+  }
+
+  .no-print {
+    display: none;
+  }
+}
