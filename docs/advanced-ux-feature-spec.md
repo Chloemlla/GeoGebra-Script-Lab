@@ -176,6 +176,55 @@
 3. 增加冲突检测与重试
 4. 再做多端恢复与团队共享
 
+### 3.7 当前代码实现
+
+当前仓库已经落地一版可运行的项目空间云端同步版，采用 `workspace key` 而不是强依赖登录态。
+
+#### 请求头
+
+前端统一通过：
+
+```http
+X-Workspace-Key: wk_xxxxxxxxxxxxx
+```
+
+标识当前工作空间。浏览器第一次访问时会在本地生成并缓存，后续所有项目、版本和导出任务都带这个 header。
+
+#### 已实现接口
+
+- `GET /api/v1/projects`
+  - 列出当前工作空间全部项目
+- `POST /api/v1/projects`
+  - 创建项目
+- `GET /api/v1/projects/{projectId}`
+  - 获取项目
+- `PATCH /api/v1/projects/{projectId}`
+  - 更新项目
+- `GET /api/v1/projects/{projectId}/versions`
+  - 获取版本列表
+- `POST /api/v1/projects/{projectId}/versions`
+  - 创建新版本
+
+#### 前端接入方式
+
+- 本地仍保留 `localStorage` 草稿
+- `800ms debounce` 后先更新本地项目
+- 随后请求云端：
+  - 若项目不存在则 `POST /projects`
+  - 若项目已存在则 `PATCH /projects/{id}`
+- 当存在 `versionLabel` 时额外调用：
+  - `POST /projects/{id}/versions`
+
+#### 冲突处理
+
+当前实现采用：
+
+- 项目 `id` 由前端本地先生成，再同步到后端
+- 首次同步时如果远端无此项目则直接创建
+- 如果远端存在同 id 项目，则用 `updatedAt` 做简单覆盖判断
+
+这是一版可运行实现，不是最终 CRDT 或三方合并方案。
+
 ---
 
 ## 4. 历史版本云端持久化版
@@ -228,6 +277,52 @@
   - 左侧旧版本
   - 右侧当前版本
 - 回滚前强制确认
+
+### 4.6 当前代码实现
+
+当前仓库已把“云端持久化版历史版本”接入后端：
+
+- 版本记录持久化结构：
+  - `project_versions`
+- 前端触发点：
+  - 手动保存
+  - 手动快照
+  - 运行脚本
+  - AI 生成脚本
+  - 参数调参
+  - 拖拽同步
+- 版本字段：
+  - `versionId`
+  - `projectId`
+  - `label`
+  - `trigger`
+  - `canvasMode`
+  - `code`
+  - `summary`
+  - `createdAt`
+
+后端会在创建版本时自动计算或接收差异摘要：
+
+```json
+{
+  "changedLines": 3,
+  "addedLines": 2,
+  "removedLines": 1
+}
+```
+
+前端当前已经会：
+
+- 打开项目时拉取远端版本列表
+- 回滚快照时保留当前草稿用于“重做”
+- 显示版本差异摘要
+
+下一步才是：
+
+- 版本 pin
+- 服务端 diff patch
+- 审阅元数据
+- 责任人 / 备注 / 审核状态
 
 ---
 
@@ -322,6 +417,49 @@
 2. 再做 `GIF`
 3. 最后做 `MP4 / PPT / GGB`
 
+### 5.6 当前代码实现
+
+当前仓库已落地一版“导出矩阵高级版”前后端持续对接：
+
+#### 前端接口
+
+- `POST /api/v1/exports`
+- `GET /api/v1/exports/{exportJobId}`
+- `GET /api/v1/exports/{exportJobId}/download`
+
+#### 当前支持情况
+
+- `svg`
+  - 后端直接生成可下载 SVG
+- `pdf`
+  - 当前生成 PDF 导出说明文件 `pdf.txt`
+- `gif / mp4 / pptx / ggb`
+  - 当前生成结构化任务结果 `*.json`
+  - 用于先打通前后端、任务模型和下载链路
+  - 真实渲染器后续替换该实现
+
+#### 为什么这样做
+
+这不是偷懒，而是为了先把以下链路打通：
+
+1. 前端导出参数面板
+2. 导出任务创建
+3. 导出结果查询
+4. 下载 URL
+5. 后续替换成真正渲染器时不需要改前端协议
+
+当前导出任务字段：
+
+```json
+{
+  "exportJobId": "exp_01...",
+  "format": "svg",
+  "status": "completed",
+  "contentType": "image/svg+xml; charset=utf-8",
+  "downloadName": "triangle-demo.svg"
+}
+```
+
 ---
 
 ## 6. 智能标注 v2
@@ -380,6 +518,52 @@
 - 前端把 `suggestedCommand` 合并到脚本
 - 可二次拖拽文字位置
 
+### 6.6 当前代码实现
+
+当前仓库已接入对象级标注回写：
+
+#### 后端接口
+
+- `POST /api/v1/ai/annotation-jobs`
+
+#### 输入
+
+```json
+{
+  "canvasMode": "geometry",
+  "commands": ["A = ...", "B = ..."],
+  "goal": "生成教学标注",
+  "locale": "zh-CN"
+}
+```
+
+#### 输出
+
+```json
+{
+  "summary": "已根据当前脚本生成可回写的教学标注建议。",
+  "annotations": [
+    {
+      "id": "ann_1",
+      "label": "中点说明",
+      "description": "解释中点对象的作用",
+      "relatedObjects": ["M", "B", "C"],
+      "suggestedCommand": "Text(\"M 是 BC 的中点\", (1.2, 1.4))"
+    }
+  ]
+}
+```
+
+#### 前端行为
+
+- 点击“对象级标注”
+- 展示候选标注列表
+- 用户勾选要写回的标注
+- 点击“回写选中标注”
+- 前端把 `suggestedCommand` 拼回脚本并重新运行
+
+这意味着“对象级标注回写”已经不是概念，而是完整前后端链路。
+
 ---
 
 ## 7. 图形解释 v2
@@ -435,6 +619,47 @@
   - 它依赖哪些对象
   - 它在整张图里的作用
 
+### 7.6 当前代码实现
+
+当前仓库已接入对象级解释与教学讲稿生成：
+
+#### 后端接口
+
+- `POST /api/v1/ai/script-insights`
+  - 生成脚本整体解释
+- `POST /api/v1/ai/object-explanations`
+  - 生成对象依赖链解释
+
+#### `script-insights` 当前返回
+
+- `summary`
+- `keyPoints`
+- `annotations`
+- `explanationSteps`
+- `objectDependencies`
+- `teachingScript`
+
+#### `object-explanations` 当前返回
+
+- `summary`
+- `objects`
+  - `name`
+  - `kind`
+  - `dependsOn`
+  - `reason`
+  - `sourceCommand`
+- `teachingScript`
+
+#### 前端行为
+
+- 点击“生成图形解读”
+  - 显示概要、关键点、标注建议、步骤说明、讲稿
+- 点击“对象依赖解释”
+  - 以当前选中对象或默认对象为 focus
+  - 展示对象级依赖链和讲稿片段
+
+这版仍然是文本解释为主，下一步才会做真正的“点击对象 -> 高亮依赖链 -> 联动解释面板”。
+
 ---
 
 ## 8. 推荐的下一阶段任务拆分
@@ -465,11 +690,19 @@
   - `src/components/App.jsx`
 - 本地工作流工具层：
   - `src/utils/studio.js`
+- 前端 API 桥接：
+  - `src/api/backend.js`
+- 后端 HTTP 处理：
+  - `backend/src/http/handlers.rs`
+- 后端类型定义：
+  - `backend/src/types.rs`
+- 后端仓储层：
+  - `backend/src/store/mod.rs`
+  - `backend/src/store/cache.rs`
+  - `backend/src/store/mongo.rs`
 - GeoGebra 样式能力：
   - `src/engine/GeoGebraEngine.js`
-- 后端 AI 解释接口：
-  - `backend/src/main.rs`
-- 前端后端桥接：
-  - `src/api/backend.js`
+- 后端模型调用：
+  - `backend/src/model.rs`
 
 这份文档的目的不是抽象讨论，而是给下一轮开发直接提供 API、数据模型和前端模块边界。

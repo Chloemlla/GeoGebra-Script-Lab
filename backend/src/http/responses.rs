@@ -64,7 +64,7 @@ pub fn with_cors(mut response: Response<Full<Bytes>>) -> Response<Full<Bytes>> {
     );
     response.headers_mut().insert(
         http::header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("Content-Type, Authorization"),
+        HeaderValue::from_static("Content-Type, Authorization, X-Workspace-Key"),
     );
     response.headers_mut().insert(
         http::header::ACCESS_CONTROL_EXPOSE_HEADERS,

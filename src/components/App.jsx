@@ -152,8 +152,10 @@ const DEFAULT_GENERATION_PROMPT = '识别图中的几何关系并输出可执行
 const DEFAULT_PROJECT_TITLE = '未命名项目';
 const DEFAULT_PROJECT_FOLDER = '个人空间';
 const SHARE_QUERY_KEY = 'share';
-const POWERSHELL_BOOTSTRAP = `$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+const POWERSHELL_BOOTSTRAP = `$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8NoBom
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
 $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
 
 function Invoke-ApiJson {
