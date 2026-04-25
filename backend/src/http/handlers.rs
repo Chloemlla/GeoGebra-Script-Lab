@@ -166,7 +166,11 @@ async fn register_user(
         last_login_at: Some(Utc::now()),
     };
     let session = build_session(&user.user_id);
-    let response = build_auth_session_response(session.token.clone(), session.expires_at, &user);
+    let response = build_auth_session_response(
+        session.token.clone(),
+        session.expires_at.to_owned(),
+        &user,
+    );
 
     if let Some(mongo_store) = &state.mongo_store {
         mongo_store.upsert_user(&user).await?;
@@ -220,7 +224,11 @@ async fn login_user(
 
     user.last_login_at = Some(Utc::now());
     let session = build_session(&user.user_id);
-    let response = build_auth_session_response(session.token.clone(), session.expires_at, &user);
+    let response = build_auth_session_response(
+        session.token.clone(),
+        session.expires_at.to_owned(),
+        &user,
+    );
 
     if let Some(mongo_store) = &state.mongo_store {
         mongo_store.upsert_user(&user).await?;
@@ -632,6 +640,15 @@ async fn get_asset(path: String, state: AppState) -> Result<Response<Full<Bytes>
         HeaderValue::from_str(&asset.content_type)
             .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
+    response.headers_mut().insert(
+        http::header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&asset.bytes.len().to_string()) {
+        response
+            .headers_mut()
+            .insert(http::header::CONTENT_LENGTH, value);
+    }
     Ok(response)
 }
 
@@ -693,6 +710,11 @@ async fn create_share(
             AppError::BadRequest(format!("cover asset not found: {}", payload.cover_asset_id))
         })?;
     ensure_owner(&cover_asset.owner_user_id, &auth.user.user_id, "asset")?;
+    if !cover_asset.uploaded {
+        return Err(AppError::BadRequest(
+            "cover asset upload is not completed yet".to_string(),
+        ));
+    }
 
     let share_id = format!("share_{}", short_id());
     let slug = format!("{}-{}", slugify(&payload.title), short_id_suffix());
@@ -717,15 +739,7 @@ async fn create_share(
         created_at: Utc::now(),
     };
 
-    if let Some(mongo_store) = &state.mongo_store {
-        mongo_store.upsert_share(&record).await?;
-    }
-    state
-        .store
-        .write()
-        .await
-        .shares
-        .insert(share_id.clone(), record.clone());
+    upsert_share_record(&state, &record).await?;
 
     Ok(json_response(
         StatusCode::OK,
@@ -791,4 +805,7 @@ async fn read_bytes(request: Request<Incoming>) -> Result<Bytes, AppError> {
     request
         .into_body()
         .collect()
-     
+        .await
+        .map(|body| body.to_bytes())
+        .map_err(|err| AppError::BadRequest(format!("unable to read body: {err}")))
+}

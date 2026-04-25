@@ -7,6 +7,7 @@ const normalizeBaseUrl = (value) => {
 };
 
 const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+let authToken = '';
 
 const buildUrl = (path) => {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
@@ -24,7 +25,9 @@ const resolveUploadUrl = (value) => {
 async function parseEnvelope(response) {
   const payload = await response.json().catch(() => null);
   if (!payload || typeof payload !== 'object') {
-    throw new Error(`Backend returned an invalid response (${response.status})`);
+    const error = new Error(`Backend returned an invalid response (${response.status})`);
+    error.status = response.status;
+    throw error;
   }
 
   if (!response.ok || payload.success === false) {
@@ -32,7 +35,10 @@ async function parseEnvelope(response) {
       payload?.error?.message
       || payload?.message
       || `Backend request failed (${response.status})`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    error.code = payload?.code || null;
+    throw error;
   }
 
   return payload.data;
@@ -41,6 +47,7 @@ async function parseEnvelope(response) {
 async function request(path, options = {}) {
   const headers = {
     Accept: 'application/json',
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     ...(options.body ? { 'Content-Type': 'application/json; charset=utf-8' } : {}),
     ...(options.headers || {}),
   };
@@ -56,6 +63,14 @@ async function request(path, options = {}) {
 
 export function getApiBaseUrl() {
   return API_BASE_URL;
+}
+
+export function setAuthToken(value) {
+  authToken = typeof value === 'string' ? value.trim() : '';
+}
+
+export function clearAuthToken() {
+  authToken = '';
 }
 
 export async function fetchHealth() {
@@ -85,6 +100,7 @@ export async function uploadAsset({ uploadUrl, file, mimeType }) {
   const response = await fetch(resolveUploadUrl(uploadUrl), {
     method: 'PUT',
     headers: {
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
       'Content-Type': mimeType || file.type || 'application/octet-stream',
     },
     body: file,
@@ -144,4 +160,28 @@ export async function createShare(payload) {
 
 export async function fetchShare(slug) {
   return request(`/api/v1/shares/${slug}`);
+}
+
+export async function registerUser(payload) {
+  return request('/api/v1/auth/register', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function loginUser(payload) {
+  return request('/api/v1/auth/login', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function fetchCurrentUser() {
+  return request('/api/v1/auth/me');
+}
+
+export async function logoutUser() {
+  return request('/api/v1/auth/logout', {
+    method: 'POST',
+  });
 }

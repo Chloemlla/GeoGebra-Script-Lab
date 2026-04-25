@@ -21,6 +21,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         state.config.model_worker_concurrency.max(1),
         state.config.model_job_queue_capacity.max(1)
     );
+    println!(
+        "asset file storage is enabled at {}",
+        state.asset_file_store.root().display()
+    );
     if state.frontend_assets.files.is_empty() {
         println!("frontend asset hosting is disabled");
     } else {

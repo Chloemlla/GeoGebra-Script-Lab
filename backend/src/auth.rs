@@ -7,11 +7,10 @@ use rand_core::OsRng;
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::store::{
-    find_session_by_token, find_user_by_id, revoke_session_by_token,
-};
+use crate::store::{find_session_by_token, find_user_by_id, revoke_session_by_token};
 use crate::types::{
-    AuthContext, AuthSessionResponse, CurrentSessionResponse, SessionRecord, UserProfile, UserRecord,
+    AuthContext, AuthSessionResponse, CurrentSessionResponse, SessionRecord, UserProfile,
+    UserRecord,
 };
 use crate::utils::short_id;
 
@@ -103,8 +102,8 @@ pub fn build_user_profile(user: &UserRecord) -> UserProfile {
         email: user.email.clone(),
         username: user.username.clone(),
         display_name: user.display_name.clone(),
-        created_at: user.created_at,
-        last_login_at: user.last_login_at,
+        created_at: user.created_at.to_owned(),
+        last_login_at: user.last_login_at.to_owned(),
     }
 }
 
@@ -126,7 +125,7 @@ pub fn build_current_session_response(
     user: &UserRecord,
 ) -> CurrentSessionResponse {
     CurrentSessionResponse {
-        expires_at: session.expires_at,
+        expires_at: session.expires_at.to_owned(),
         user: build_user_profile(user),
     }
 }
