@@ -7,8 +7,8 @@ import AppIcon from './AppIcon';
 import GeoGebraEngine from '../engine/GeoGebraEngine';
 import Preprocessor from '../engine/Preprocessor';
 import Dispatcher from '../engine/Dispatcher';
+import { Analytics } from '@vercel/analytics/react';
 import './App.css';
-import { Analytics } from "@vercel/analytics/next"
 
 const DEFAULT_CODE = `// GeoGebra 交互式绘图系统
 // 在下方输入 GeoGebra 指令，每行一条
