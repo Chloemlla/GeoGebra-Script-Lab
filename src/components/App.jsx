@@ -1163,62 +1163,6 @@ const App = () => {
           </article>
         </section>
 
-        <section className="chapter chapter-white api-section">
-          <div className="chapter-header">
-            <div>
-              <span className="section-kicker">API Contract</span>
-              <h2>后端接口与 PowerShell 返回格式</h2>
-              <p>
-                下面这组接口是前端上传图片、后端 AI 生成绘图指令、前端回放渲染与分享画布的最小可行后端。
-                所有返回统一为 UTF-8 JSON，避免调试时中文乱码。
-              </p>
-            </div>
-          </div>
-
-          <div className="api-summary-grid">
-            <article className="api-summary-card">
-              <span className="card-kicker">统一返回结构</span>
-              <pre className="api-code-block">{API_RESPONSE_ENVELOPE}</pre>
-            </article>
-
-            <article className="api-summary-card">
-              <span className="card-kicker">PowerShell UTF-8</span>
-              <pre className="api-code-block">{POWERSHELL_UTF8_NOTE}</pre>
-            </article>
-          </div>
-
-          <div className="api-endpoint-grid">
-            {API_ENDPOINT_BLUEPRINT.map((endpoint) => (
-              <article key={endpoint.id} className="api-endpoint-card">
-                <div className="api-endpoint-head">
-                  <span className={`api-method api-method-${endpoint.method.toLowerCase()}`}>
-                    {endpoint.method}
-                  </span>
-                  <code className="api-path">{endpoint.path}</code>
-                </div>
-
-                <strong className="api-endpoint-title">{endpoint.title}</strong>
-                <p className="api-endpoint-description">{endpoint.description}</p>
-
-                <div className="api-code-group">
-                  <span className="api-code-label">Request</span>
-                  <pre className="api-code-block">{endpoint.request}</pre>
-                </div>
-
-                <div className="api-code-group">
-                  <span className="api-code-label">Response</span>
-                  <pre className="api-code-block">{endpoint.response}</pre>
-                </div>
-
-                <div className="api-code-group">
-                  <span className="api-code-label">PowerShell</span>
-                  <pre className="api-code-block">{endpoint.powershell}</pre>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-
         <main className="workspace-shell">
           {isCompactLayout && (
             <div className="mobile-tabs" role="tablist" aria-label="移动端视图切换">
