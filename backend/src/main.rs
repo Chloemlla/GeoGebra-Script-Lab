@@ -69,6 +69,7 @@ struct MemoryStore {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ApiEnvelope<T> {
     success: bool,
     code: String,
@@ -80,18 +81,21 @@ struct ApiEnvelope<T> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ApiMeta {
     timestamp: DateTime<Utc>,
     version: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ApiErrorBody {
     message: String,
     details: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DrawingJobResultResponse {
     job_id: String,
     status: String,
@@ -103,12 +107,14 @@ struct DrawingJobResultResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RenderHints {
     reset_before_run: bool,
     suggested_viewport: Viewport,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Viewport {
     xmin: i32,
     xmax: i32,
@@ -117,6 +123,7 @@ struct Viewport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Diagnostics {
     confidence: f32,
     human_review_recommended: bool,
@@ -223,6 +230,7 @@ enum AppError {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ModelConfigView {
     base_url: String,
     model_name: String,
@@ -230,9 +238,13 @@ struct ModelConfigView {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ModelConfigUpdateRequest {
+    #[serde(alias = "base_url")]
     base_url: Option<String>,
+    #[serde(alias = "model_name")]
     model_name: Option<String>,
+    #[serde(alias = "api_key")]
     api_key: Option<String>,
 }
 
