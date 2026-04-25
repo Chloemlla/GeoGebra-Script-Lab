@@ -1400,6 +1400,7 @@ fn build_version_summary(previous_code: &str, next_code: &str) -> ProjectVersion
 }
 
 fn build_export_job_record(
+    user_id: &str,
     workspace_key: &str,
     payload: ExportJobCreateRequest,
     now: chrono::DateTime<Utc>,
@@ -1456,6 +1457,7 @@ fn build_export_job_record(
 
     Ok(ExportJobRecord {
         export_job_id,
+        owner_user_id: user_id.to_string(),
         owner_workspace_key: workspace_key.to_string(),
         project_id: payload.project_id,
         title: title.clone(),
@@ -1521,11 +1523,17 @@ fn ensure_owner(
     Ok(())
 }
 
-fn ensure_workspace_owner(
+fn ensure_actor_owns_resource(
+    owner_user_id: &str,
+    current_user_id: &str,
     owner_workspace_key: &str,
     current_workspace_key: &str,
     resource: &str,
 ) -> Result<(), AppError> {
+    if !owner_user_id.is_empty() {
+        return ensure_owner(owner_user_id, current_user_id, resource);
+    }
+
     if owner_workspace_key.is_empty() || owner_workspace_key != current_workspace_key {
         return Err(AppError::Unauthorized(format!(
             "you do not have access to this {resource}"
@@ -1533,6 +1541,36 @@ fn ensure_workspace_owner(
     }
 
     Ok(())
+}
+
+async fn claim_project_owner_if_needed(
+    project: &mut ProjectRecord,
+    current_user_id: &str,
+    current_workspace_key: &str,
+    state: &AppState,
+) -> Result<(), AppError> {
+    if !project.owner_user_id.is_empty() || project.owner_workspace_key != current_workspace_key {
+        return Ok(());
+    }
+
+    project.owner_user_id = current_user_id.to_string();
+    upsert_project_record(state, project).await
+}
+
+async fn claim_export_job_owner_if_needed(
+    export_job: &mut ExportJobRecord,
+    current_user_id: &str,
+    current_workspace_key: &str,
+    state: &AppState,
+) -> Result<(), AppError> {
+    if !export_job.owner_user_id.is_empty()
+        || export_job.owner_workspace_key != current_workspace_key
+    {
+        return Ok(());
+    }
+
+    export_job.owner_user_id = current_user_id.to_string();
+    upsert_export_job_record(state, export_job).await
 }
 
 async fn read_json(request: Request<Incoming>) -> Result<Value, AppError> {
