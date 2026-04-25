@@ -1852,6 +1852,7 @@ const App = () => {
       }
 
       appendLog(`已打开项目：${project.title}`, 'info');
+      void hydrateProjectVersionsFromCloud(project.id);
       if (isCompactLayout) {
         setActiveTab('code');
       }
@@ -1866,6 +1867,7 @@ const App = () => {
       resetVersionBrowsing,
       savedProjects,
       selectedCanvasModeId,
+      hydrateProjectVersionsFromCloud,
     ]
   );
 
@@ -2371,6 +2373,158 @@ const App = () => {
     appendLog('已将图形解释写入脚本注释', 'success');
   }, [appendLog, scriptInsights]);
 
+  const handleGenerateAnnotations = useCallback(async () => {
+    let commands = [];
+
+    try {
+      commands = Preprocessor.clean(code);
+    } catch (error) {
+      alert(error.message);
+      return;
+    }
+
+    if (commands.length === 0) {
+      alert('当前脚本为空，无法生成对象级标注。');
+      return;
+    }
+
+    setIsGeneratingAnnotations(true);
+
+    try {
+      const result = await createAnnotationJob({
+        canvasMode: selectedCanvasModeId,
+        commands,
+        goal: generationPrompt,
+        locale: 'zh-CN',
+      });
+      setAnnotationJobResult(result);
+      setSelectedAnnotationIds((result.annotations || []).map((item) => item.id));
+      appendLog('已生成对象级标注建议', 'success');
+    } catch (error) {
+      appendLog(`对象级标注生成失败：${error.message}`, 'error');
+      alert(error.message);
+    } finally {
+      setIsGeneratingAnnotations(false);
+    }
+  }, [appendLog, code, generationPrompt, selectedCanvasModeId]);
+
+  const handleToggleAnnotationSelection = useCallback((annotationId) => {
+    setSelectedAnnotationIds((prev) =>
+      prev.includes(annotationId)
+        ? prev.filter((item) => item !== annotationId)
+        : [...prev, annotationId]
+    );
+  }, []);
+
+  const handleApplySelectedAnnotations = useCallback(async () => {
+    const commands = (annotationJobResult?.annotations || [])
+      .filter((item) => selectedAnnotationIds.includes(item.id))
+      .map((item) => item.suggestedCommand)
+      .filter(Boolean);
+
+    if (commands.length === 0) {
+      alert('请先选择要回写的标注。');
+      return;
+    }
+
+    const nextCode = `${code.trimEnd()}\n\n// AI 对象级标注\n${commands.join('\n')}\n`;
+    setCode(nextCode);
+    appendLog(`已回写 ${commands.length} 条对象级标注命令`, 'success');
+    await executePreparedCommands(Preprocessor.clean(nextCode), {
+      nextCodeText: nextCode,
+      logMessage: '对象级标注已回写并重新渲染',
+      versionLabel: 'AI 标注回写',
+    });
+  }, [annotationJobResult?.annotations, code, executePreparedCommands, selectedAnnotationIds, appendLog]);
+
+  const handleGenerateObjectExplanations = useCallback(async () => {
+    let commands = [];
+
+    try {
+      commands = Preprocessor.clean(code);
+    } catch (error) {
+      alert(error.message);
+      return;
+    }
+
+    if (commands.length === 0) {
+      alert('当前脚本为空，无法生成对象解释。');
+      return;
+    }
+
+    setIsGeneratingObjectExplanations(true);
+
+    try {
+      const result = await createObjectExplanations({
+        canvasMode: selectedCanvasModeId,
+        commands,
+        focusObjects: focusObjectNames,
+        locale: 'zh-CN',
+      });
+      setObjectExplanationResult(result);
+      appendLog('已生成对象级依赖解释', 'success');
+    } catch (error) {
+      appendLog(`对象解释生成失败：${error.message}`, 'error');
+      alert(error.message);
+    } finally {
+      setIsGeneratingObjectExplanations(false);
+    }
+  }, [appendLog, code, focusObjectNames, selectedCanvasModeId]);
+
+  const handleCreateExportMatrixJob = useCallback(async () => {
+    let commands = [];
+
+    try {
+      commands = Preprocessor.clean(code);
+    } catch (error) {
+      alert(error.message);
+      return;
+    }
+
+    if (commands.length === 0) {
+      alert('当前脚本为空，无法导出。');
+      return;
+    }
+
+    setIsCreatingExportJob(true);
+
+    try {
+      const job = await createExportJob({
+        projectId: currentProjectId,
+        title: projectDraft.title.trim() || DEFAULT_PROJECT_TITLE,
+        canvasMode: selectedCanvasModeId,
+        commands,
+        format: exportDraft.format,
+        options: {
+          includeGrid: exportDraft.includeGrid,
+          includeAxes: exportDraft.includeAxes,
+          width: exportDraft.width,
+          height: exportDraft.height,
+        },
+      });
+
+      const latest = await fetchExportJob(job.exportJobId);
+      setLatestExportJob(latest);
+      appendLog(`已创建 ${exportDraft.format.toUpperCase()} 导出任务`, 'success');
+    } catch (error) {
+      appendLog(`导出任务创建失败：${error.message}`, 'error');
+      alert(error.message);
+    } finally {
+      setIsCreatingExportJob(false);
+    }
+  }, [
+    appendLog,
+    code,
+    currentProjectId,
+    exportDraft.format,
+    exportDraft.height,
+    exportDraft.includeAxes,
+    exportDraft.includeGrid,
+    exportDraft.width,
+    projectDraft.title,
+    selectedCanvasModeId,
+  ]);
+
   const handleExportScriptFile = useCallback(() => {
     downloadTextFile(
       `${(projectDraft.title.trim() || DEFAULT_PROJECT_TITLE).replace(/\s+/g, '-')}.ggs.txt`,
@@ -2441,6 +2595,11 @@ const App = () => {
   }, [code, commitProjects, selectedCanvasModeId, storedStudioState.projects, storedStudioState.currentProjectId]);
 
   useEffect(() => {
+    if (hasHydratedCloudProjectsRef.current) {
+      return;
+    }
+
+    hasHydratedCloudProjectsRef.current = true;
     let isCancelled = false;
 
     const hydrateProjectsFromCloud = async () => {
@@ -2860,6 +3019,7 @@ const App = () => {
               <span className="nav-pill">{selectedCanvasMode.label}</span>
               <span className={`nav-pill nav-pill-${authTone}`}>{authStatusText}</span>
               <span className={`nav-pill nav-pill-${backendTone}`}>{backendStatusText}</span>
+              <span className={`nav-pill nav-pill-${cloudSyncTone}`}>{cloudSyncState.message}</span>
               <span className={`nav-pill nav-pill-${syncTone}`}>{syncStatusText}</span>
               <span className={`nav-pill nav-pill-${recentRunTone}`}>{recentRunStatus}</span>
             </div>
@@ -3241,6 +3401,18 @@ const App = () => {
                       <button type="button" className="studio-btn" onClick={handleExportScriptFile}>
                         导出脚本
                       </button>
+                    </div>
+
+                    <div className="cloud-sync-panel">
+                      <span className={`meta-pill meta-pill-${cloudSyncTone}`}>
+                        {cloudSyncState.message}
+                      </span>
+                      <small>
+                        Workspace: {cloudSyncState.workspaceKey}
+                        {cloudSyncState.lastSyncedAt
+                          ? ` · 最近同步 ${new Date(cloudSyncState.lastSyncedAt).toLocaleString('zh-CN')}`
+                          : ''}
+                      </small>
                     </div>
 
                     <div className="studio-list">

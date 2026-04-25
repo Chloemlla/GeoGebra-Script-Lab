@@ -249,8 +249,13 @@ impl MongoStore {
     }
 
     pub async fn find_user_by_id(&self, user_id: &str) -> Result<Option<UserRecord>, AppError> {
-        self.find_one_record("find_user_by_id", &self.users, doc! { "_id": user_id }, None)
-            .await
+        self.find_one_record(
+            "find_user_by_id",
+            &self.users,
+            doc! { "_id": user_id },
+            None,
+        )
+        .await
     }
 
     pub async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, AppError> {
@@ -379,8 +384,9 @@ impl MongoStore {
         id: &str,
         value: &T,
     ) -> Result<(), AppError> {
-        let mut document = to_document(value)
-            .map_err(|err| AppError::Internal(format!("unable to build MongoDB document: {err}")))?;
+        let mut document = to_document(value).map_err(|err| {
+            AppError::Internal(format!("unable to build MongoDB document: {err}"))
+        })?;
         document.insert("_id", id);
 
         let started_at = Instant::now();
@@ -434,15 +440,14 @@ impl MongoStore {
         } else {
             action
         };
-        let mut cursor = action
-            .await
-            .map_err(|err| AppError::Internal(format!("unable to read MongoDB documents: {err}")))?;
+        let mut cursor = action.await.map_err(|err| {
+            AppError::Internal(format!("unable to read MongoDB documents: {err}"))
+        })?;
         let mut items = Vec::new();
 
-        while cursor
-            .advance()
-            .await
-            .map_err(|err| AppError::Internal(format!("unable to iterate MongoDB documents: {err}")))? {
+        while cursor.advance().await.map_err(|err| {
+            AppError::Internal(format!("unable to iterate MongoDB documents: {err}"))
+        })? {
             let document = cursor
                 .deserialize_current()
                 .map_err(|err| AppError::Internal(format!("invalid MongoDB document: {err}")))?;
@@ -490,9 +495,7 @@ impl MongoStore {
         name: &str,
     ) -> Result<(), AppError> {
         let started_at = Instant::now();
-        let options = IndexOptions::builder()
-            .name(Some(name.to_string()))
-            .build();
+        let options = IndexOptions::builder().name(Some(name.to_string())).build();
         let model = IndexModel::builder()
             .keys(keys)
             .options(Some(options))
@@ -526,10 +529,9 @@ impl MongoStore {
             .options(Some(options))
             .build();
 
-        collection
-            .create_index(model)
-            .await
-            .map_err(|err| AppError::Internal(format!("unable to create MongoDB TTL index: {err}")))?;
+        collection.create_index(model).await.map_err(|err| {
+            AppError::Internal(format!("unable to create MongoDB TTL index: {err}"))
+        })?;
         self.metrics
             .record_mongo_query(operation_name, started_at.elapsed());
 

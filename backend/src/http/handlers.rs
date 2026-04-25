@@ -17,8 +17,8 @@ use crate::auth::{
 use crate::error::AppError;
 use crate::frontend::serve_frontend_asset;
 use crate::http::responses::{
-    bytes_response, cors_preflight_response, envelope, error_response, json_response, text_response,
-    with_cors,
+    bytes_response, cors_preflight_response, envelope, error_response, json_response,
+    text_response, with_cors,
 };
 use crate::metrics::endpoint_label;
 use crate::model::ModelClient;
@@ -27,17 +27,17 @@ use crate::store::{
     cache_asset_payload, find_any_job_record, find_asset_payload, find_asset_record,
     find_export_job_record, find_job_record, find_project_record, find_project_versions_by_project,
     find_share_by_slug, find_user_by_email, find_user_by_id, find_user_by_username,
-    list_projects_by_workspace, revoke_session_by_token, upsert_asset_record, upsert_export_job_record,
-    upsert_job_record, upsert_project_record, upsert_project_version_record, upsert_session_record,
-    upsert_share_record, upsert_user_record,
+    list_projects_by_workspace, revoke_session_by_token, upsert_asset_record,
+    upsert_export_job_record, upsert_job_record, upsert_project_record,
+    upsert_project_version_record, upsert_session_record, upsert_share_record, upsert_user_record,
 };
 use crate::types::{
     AnnotationJobRequest, Diagnostics, DrawingJobCreateRequest, DrawingJobRecord,
     DrawingJobResultResponse, ExportJobCreateRequest, ExportJobRecord, ExportJobStatus, JobStatus,
     LoginRequest, ModelConfigUpdateRequest, ObjectExplanationRequest, ProjectCreateRequest,
     ProjectRecord, ProjectUpdateRequest, ProjectVersionCreateRequest, ProjectVersionRecord,
-    ProjectVersionSummary, RegisterRequest, RenderHints, ScriptInsightsRequest,
-    ShareCreateRequest, ShareRecord, UploadedAsset, UploadCreateRequest, UserRecord, Viewport,
+    ProjectVersionSummary, RegisterRequest, RenderHints, ScriptInsightsRequest, ShareCreateRequest,
+    ShareRecord, UploadCreateRequest, UploadedAsset, UserRecord, Viewport,
 };
 use crate::utils::{fallback_commands, request_id, short_id, short_id_suffix, slugify};
 
@@ -74,15 +74,18 @@ pub async fn route_request(
     let is_project_patch = method == Method::PATCH
         && path.starts_with("/api/v1/projects/")
         && !path.ends_with("/versions");
-    let is_project_versions_get =
-        method == Method::GET && path.starts_with("/api/v1/projects/") && path.ends_with("/versions");
-    let is_project_versions_post =
-        method == Method::POST && path.starts_with("/api/v1/projects/") && path.ends_with("/versions");
+    let is_project_versions_get = method == Method::GET
+        && path.starts_with("/api/v1/projects/")
+        && path.ends_with("/versions");
+    let is_project_versions_post = method == Method::POST
+        && path.starts_with("/api/v1/projects/")
+        && path.ends_with("/versions");
     let is_export_get = method == Method::GET
         && path.starts_with("/api/v1/exports/")
         && !path.ends_with("/download");
-    let is_export_download =
-        method == Method::GET && path.starts_with("/api/v1/exports/") && path.ends_with("/download");
+    let is_export_download = method == Method::GET
+        && path.starts_with("/api/v1/exports/")
+        && path.ends_with("/download");
     let is_frontend_get = method == Method::GET && !path.starts_with("/api/");
 
     match (method, path.as_str()) {
@@ -145,7 +148,9 @@ pub async fn route_request(
         (Method::POST, "/api/v1/projects") => create_project(request, state).await,
         (Method::POST, "/api/v1/assets/uploads") => create_upload(request, state).await,
         (Method::POST, "/api/v1/ai/drawing-jobs") => create_drawing_job(request, state).await,
-        (Method::POST, "/api/v1/ai/script-insights") => create_script_insights(request, state).await,
+        (Method::POST, "/api/v1/ai/script-insights") => {
+            create_script_insights(request, state).await
+        }
         (Method::POST, "/api/v1/ai/annotation-jobs") => create_annotation_job(request, state).await,
         (Method::POST, "/api/v1/ai/object-explanations") => {
             create_object_explanations(request, state).await
@@ -184,7 +189,9 @@ async fn register_user(
     let username = normalize_username(&payload.username);
 
     if find_user_by_email(&email, &state).await?.is_some() {
-        return Err(AppError::Conflict("email is already registered".to_string()));
+        return Err(AppError::Conflict(
+            "email is already registered".to_string(),
+        ));
     }
 
     if find_user_by_username(&username, &state).await?.is_some() {
@@ -201,11 +208,8 @@ async fn register_user(
         last_login_at: Some(Utc::now()),
     };
     let session = build_session(&user.user_id);
-    let response = build_auth_session_response(
-        session.token.clone(),
-        session.expires_at.to_owned(),
-        &user,
-    );
+    let response =
+        build_auth_session_response(session.token.clone(), session.expires_at.to_owned(), &user);
 
     upsert_user_record(&state, &user).await?;
     upsert_session_record(&state, &session).await?;
@@ -252,11 +256,8 @@ async fn login_user(
 
     user.last_login_at = Some(Utc::now());
     let session = build_session(&user.user_id);
-    let response = build_auth_session_response(
-        session.token.clone(),
-        session.expires_at.to_owned(),
-        &user,
-    );
+    let response =
+        build_auth_session_response(session.token.clone(), session.expires_at.to_owned(), &user);
 
     upsert_user_record(&state, &user).await?;
     upsert_session_record(&state, &session).await?;
@@ -577,7 +578,9 @@ async fn create_project_version(
         },
         canvas_mode: normalize_canvas_mode(&payload.canvas_mode),
         code: payload.code.clone(),
-        summary: payload.summary.unwrap_or_else(|| build_version_summary(&project.latest_code, &payload.code)),
+        summary: payload
+            .summary
+            .unwrap_or_else(|| build_version_summary(&project.latest_code, &payload.code)),
         created_at: Utc::now(),
     };
 
@@ -613,7 +616,10 @@ async fn create_script_insights(
         return Err(AppError::BadRequest("commands are required".to_string()));
     }
 
-    let response = state.model_client.generate_script_insights(&payload).await?;
+    let response = state
+        .model_client
+        .generate_script_insights(&payload)
+        .await?;
     Ok(json_response(
         StatusCode::OK,
         envelope(
@@ -665,7 +671,10 @@ async fn create_object_explanations(
         return Err(AppError::BadRequest("commands are required".to_string()));
     }
 
-    let response = state.model_client.generate_object_explanations(&payload).await?;
+    let response = state
+        .model_client
+        .generate_object_explanations(&payload)
+        .await?;
     Ok(json_response(
         StatusCode::OK,
         envelope(
@@ -719,7 +728,11 @@ async fn get_export_job(
     let export_job = find_export_job_record(export_job_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_workspace_owner(&export_job.owner_workspace_key, &workspace_key, "export job")?;
+    ensure_workspace_owner(
+        &export_job.owner_workspace_key,
+        &workspace_key,
+        "export job",
+    )?;
 
     Ok(json_response(
         StatusCode::OK,
@@ -746,7 +759,11 @@ async fn download_export_job(
     let export_job = find_export_job_record(export_job_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_workspace_owner(&export_job.owner_workspace_key, &workspace_key, "export job")?;
+    ensure_workspace_owner(
+        &export_job.owner_workspace_key,
+        &workspace_key,
+        "export job",
+    )?;
 
     let mut response = bytes_response(
         StatusCode::OK,
@@ -1228,7 +1245,9 @@ fn require_workspace_key(headers: &HeaderMap) -> Result<String, AppError> {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
     {
-        return Err(AppError::BadRequest("workspace key format is invalid".to_string()));
+        return Err(AppError::BadRequest(
+            "workspace key format is invalid".to_string(),
+        ));
     }
 
     Ok(value)
@@ -1238,7 +1257,12 @@ fn extract_project_id_from_versions_path(path: &str) -> Result<&str, AppError> {
     path.trim_start_matches("/api/v1/projects/")
         .trim_end_matches("/versions")
         .strip_suffix('/')
-        .or_else(|| Some(path.trim_start_matches("/api/v1/projects/").trim_end_matches("/versions")))
+        .or_else(|| {
+            Some(
+                path.trim_start_matches("/api/v1/projects/")
+                    .trim_end_matches("/versions"),
+            )
+        })
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::BadRequest("project id is required".to_string()))
@@ -1421,7 +1445,11 @@ fn escape_svg(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn ensure_owner(owner_user_id: &str, current_user_id: &str, resource: &str) -> Result<(), AppError> {
+fn ensure_owner(
+    owner_user_id: &str,
+    current_user_id: &str,
+    resource: &str,
+) -> Result<(), AppError> {
     if owner_user_id.is_empty() || owner_user_id != current_user_id {
         return Err(AppError::Unauthorized(format!(
             "you do not have access to this {resource}"

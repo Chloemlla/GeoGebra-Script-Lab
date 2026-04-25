@@ -186,7 +186,9 @@ pub async fn list_projects_by_workspace(
         .collect::<Vec<_>>();
 
     if let Some(mongo_store) = &state.mongo_store {
-        let mongo_items = mongo_store.find_projects_by_workspace(workspace_key).await?;
+        let mongo_items = mongo_store
+            .find_projects_by_workspace(workspace_key)
+            .await?;
         let mut store = state.store.write().await;
         for record in &mongo_items {
             store
@@ -291,7 +293,13 @@ pub async fn find_export_job_record(
         return Ok(record);
     }
 
-    Ok(state.store.read().await.export_jobs.get(export_job_id).cloned())
+    Ok(state
+        .store
+        .read()
+        .await
+        .export_jobs
+        .get(export_job_id)
+        .cloned())
 }
 
 pub async fn upsert_export_job_record(
@@ -465,10 +473,7 @@ pub async fn revoke_session_by_token(
     Ok(removed.or(mongo_removed))
 }
 
-pub async fn upsert_asset_record(
-    state: &AppState,
-    record: &AssetRecord,
-) -> Result<(), AppError> {
+pub async fn upsert_asset_record(state: &AppState, record: &AssetRecord) -> Result<(), AppError> {
     if let Some(mongo_store) = &state.mongo_store {
         mongo_store.upsert_asset(record).await?;
     }
@@ -501,10 +506,7 @@ pub async fn upsert_job_record(
     Ok(())
 }
 
-pub async fn upsert_share_record(
-    state: &AppState,
-    record: &ShareRecord,
-) -> Result<(), AppError> {
+pub async fn upsert_share_record(state: &AppState, record: &ShareRecord) -> Result<(), AppError> {
     if let Some(mongo_store) = &state.mongo_store {
         mongo_store.upsert_share(record).await?;
     }
@@ -514,10 +516,7 @@ pub async fn upsert_share_record(
     Ok(())
 }
 
-pub async fn upsert_user_record(
-    state: &AppState,
-    record: &UserRecord,
-) -> Result<(), AppError> {
+pub async fn upsert_user_record(state: &AppState, record: &UserRecord) -> Result<(), AppError> {
     if let Some(mongo_store) = &state.mongo_store {
         mongo_store.upsert_user(record).await?;
     }

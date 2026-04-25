@@ -18,11 +18,7 @@ pub fn json_response<T: Serialize>(
     bytes_response(status, Bytes::from(body), "application/json; charset=utf-8")
 }
 
-pub fn text_response(
-    status: StatusCode,
-    body: &str,
-    content_type: &str,
-) -> Response<Full<Bytes>> {
+pub fn text_response(status: StatusCode, body: &str, content_type: &str) -> Response<Full<Bytes>> {
     bytes_response(
         status,
         Bytes::copy_from_slice(body.as_bytes()),

@@ -40,7 +40,9 @@ impl ModelClient {
                 .tcp_keepalive(Duration::from_secs(30))
                 .http2_adaptive_window(true)
                 .build()
-                .map_err(|err| AppError::Internal(format!("unable to build model client: {err}")))?,
+                .map_err(|err| {
+                    AppError::Internal(format!("unable to build model client: {err}"))
+                })?,
         })
     }
 
@@ -163,7 +165,11 @@ impl ModelClient {
             )
             .await?;
 
-        Ok(parse_object_explanations(response, &input.commands, &input.focus_objects))
+        Ok(parse_object_explanations(
+            response,
+            &input.commands,
+            &input.focus_objects,
+        ))
     }
 
     async fn request_structured_json(
@@ -305,7 +311,9 @@ fn parse_script_insights(value: Value, commands: &[String]) -> ScriptInsightsRes
         .map(|items| {
             items
                 .iter()
-                .filter_map(|item| serde_json::from_value::<ObjectExplanationItem>(item.clone()).ok())
+                .filter_map(|item| {
+                    serde_json::from_value::<ObjectExplanationItem>(item.clone()).ok()
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -316,7 +324,11 @@ fn parse_script_insights(value: Value, commands: &[String]) -> ScriptInsightsRes
             .and_then(Value::as_str)
             .unwrap_or("脚本会按顺序构造图形并逐步建立对象关系。")
             .to_string(),
-        key_points: parse_string_list(content.get("keyPoints").or_else(|| content.get("key_points"))),
+        key_points: parse_string_list(
+            content
+                .get("keyPoints")
+                .or_else(|| content.get("key_points")),
+        ),
         annotations: parse_string_list(content.get("annotations")),
         explanation_steps: parse_string_list(
             content
@@ -325,10 +337,17 @@ fn parse_script_insights(value: Value, commands: &[String]) -> ScriptInsightsRes
         ),
         object_dependencies,
         teaching_script: parse_string_list(
-            content.get("teachingScript").or_else(|| content.get("teaching_script")),
+            content
+                .get("teachingScript")
+                .or_else(|| content.get("teaching_script")),
         )
         .into_iter()
-        .chain(commands.iter().take(2).map(|command| format!("命令 `{command}` 会创建或更新一个几何对象。")))
+        .chain(
+            commands
+                .iter()
+                .take(2)
+                .map(|command| format!("命令 `{command}` 会创建或更新一个几何对象。")),
+        )
         .take(8)
         .collect(),
     }
@@ -342,7 +361,9 @@ fn parse_annotation_job(value: Value, commands: &[String]) -> AnnotationJobRespo
         .map(|items| {
             items
                 .iter()
-                .filter_map(|item| serde_json::from_value::<crate::types::AnnotationSuggestion>(item.clone()).ok())
+                .filter_map(|item| {
+                    serde_json::from_value::<crate::types::AnnotationSuggestion>(item.clone()).ok()
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_else(|| {
@@ -387,7 +408,9 @@ fn parse_object_explanations(
         .map(|items| {
             items
                 .iter()
-                .filter_map(|item| serde_json::from_value::<ObjectExplanationItem>(item.clone()).ok())
+                .filter_map(|item| {
+                    serde_json::from_value::<ObjectExplanationItem>(item.clone()).ok()
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_else(|| {
@@ -415,7 +438,9 @@ fn parse_object_explanations(
             .to_string(),
         objects,
         teaching_script: parse_string_list(
-            content.get("teachingScript").or_else(|| content.get("teaching_script")),
+            content
+                .get("teachingScript")
+                .or_else(|| content.get("teaching_script")),
         ),
     }
 }
