@@ -14,6 +14,7 @@ const MANIFEST_FILENAME = 'package.json';
 const CARGO_MANIFEST_FILENAME = 'Cargo.toml';
 const CARGO_LOCK_FILENAME = 'Cargo.lock';
 const PNPM_COMMAND = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+const COREPACK_COMMAND = process.platform === 'win32' ? 'corepack.cmd' : 'corepack';
 const CARGO_COMMAND = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
 const CRATES_IO_API_ROOT = 'https://crates.io/api/v1/crates';
 const CRATES_IO_USER_AGENT = 'geograba-dependabot-alert-fixer';
@@ -58,11 +59,18 @@ function quotePowerShellArgument(argument) {
 }
 
 function formatPowerShellCommand(cwd, command, args = []) {
-  return `PS ${cwd}> ${[command, ...args].map(quotePowerShellArgument).join(' ')}`;
+  return `${cwd}> ${[command, ...args].map(quotePowerShellArgument).join(' ')}`;
 }
 
 function printAction(cwd, command, args = []) {
   console.log(formatPowerShellCommand(cwd, command, args));
+}
+
+function createSpawnError(commandLabel, cwd, error) {
+  return Object.assign(
+    new Error(`Unable to execute ${commandLabel} in ${cwd}: ${error.message}`),
+    { code: error.code }
+  );
 }
 
 function collectDependencyNames(manifest) {
@@ -413,30 +421,54 @@ async function runPnpmUpgrade(target) {
   const args = ['up', '--latest', ...target.dependencyNames];
   printAction(target.dir, 'pnpm', args);
 
-  await new Promise((resolve, reject) => {
-    const child = spawn(PNPM_COMMAND, args, {
-      cwd: target.dir,
-      stdio: 'inherit',
-      env: process.env,
+  const executePnpm = (command, commandArgs, commandLabel) =>
+    new Promise((resolve, reject) => {
+      const child = spawn(command, commandArgs, {
+        cwd: target.dir,
+        stdio: 'inherit',
+        env: process.env,
+      });
+
+      child.on('error', (error) => {
+        reject(createSpawnError(commandLabel, target.dir, error));
+      });
+
+      child.on('exit', (code, signal) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        reject(
+          new Error(
+            `${commandLabel} exited abnormally for ${target.packageJsonLabel}: ${signal ? `signal ${signal}` : `code ${code}`}`
+          )
+        );
+      });
     });
 
-    child.on('error', (error) => {
-      reject(new Error(`Unable to execute pnpm in ${target.dir}: ${error.message}`));
-    });
+  try {
+    await executePnpm(PNPM_COMMAND, args, 'pnpm');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
 
-    child.on('exit', (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
+    console.log('  - pnpm was not found on PATH, retrying with corepack.');
+    printAction(target.dir, 'corepack', ['pnpm', ...args]);
+
+    try {
+      await executePnpm(COREPACK_COMMAND, ['pnpm', ...args], 'corepack pnpm');
+    } catch (corepackError) {
+      if (corepackError?.code === 'ENOENT') {
+        throw new Error(
+          `Neither pnpm nor corepack is available in ${target.dir}. Install pnpm or enable Corepack before running this script.`
+        );
       }
 
-      reject(
-        new Error(
-          `pnpm exited abnormally for ${target.packageJsonLabel}: ${signal ? `signal ${signal}` : `code ${code}`}`
-        )
-      );
-    });
-  });
+      throw corepackError;
+    }
+  }
 }
 
 async function runRustUpgrade(target) {
@@ -491,7 +523,7 @@ async function runRustUpgrade(target) {
     });
 
     child.on('error', (error) => {
-      reject(new Error(`Unable to execute cargo in ${target.dir}: ${error.message}`));
+      reject(createSpawnError('cargo', target.dir, error));
     });
 
     child.on('exit', (code, signal) => {
