@@ -5216,7 +5216,7 @@ const App = () => {
         </main>
         )}
 
-        {currentPage.id === APP_PAGE_IDS.backend && (
+        {currentPage.id === APP_PAGE_IDS.backend && isAdminUser && (
           <AppBackendPage
             backendStatus={backendStatus}
             generationPrompt={generationPrompt}
