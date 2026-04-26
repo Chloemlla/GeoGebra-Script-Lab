@@ -4223,12 +4223,27 @@ const App = () => {
                       <strong>{latestJobResult?.sceneSummary || '--'}</strong>
                     </div>
                     <div className="backend-metric">
+                      <span>Share</span>
+                      {latestShare?.localShareUrl ? (
+                        <a
+                          href={latestShare.localShareUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="backend-link"
+                        >
+                          {latestShare.localShareUrl}
+                        </a>
+                      ) : (
+                        <strong>--</strong>
+                      )}
+                    </div>
+                    <div className="backend-metric">
                       <span>Active Share</span>
-                      <strong>{activeShareSlug || '--'}</strong>
+                      <strong>{latestShare?.slug || activeShareSlug || '--'}</strong>
                     </div>
                   </div>
 
-                  {latestJobResult ? (
+                  {latestJobResult && (
                     <div className="backend-result">
                       <div className="backend-badges">
                         <span className="backend-badge">
@@ -4252,22 +4267,42 @@ const App = () => {
                         <summary>查看生成 commands</summary>
                         <pre>{normalizeScriptText(latestJobResult.commands || [])}</pre>
                       </details>
+                    </div>
+                  )}
 
-                      {latestShare?.localShareUrl && (
-                        <a
-                          href={latestShare.localShareUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="backend-link"
-                        >
-                          {latestShare.localShareUrl}
-                        </a>
+                  {latestShare ? (
+                    <div className="backend-result">
+                      <div className="backend-badges">
+                        <span className="backend-badge backend-badge-success">share published</span>
+                        <span className="backend-badge">{latestShare.slug}</span>
+                      </div>
+
+                      <p>当前脚本的分享链接已经生成，可以直接打开或继续分发。</p>
+
+                      <a
+                        href={latestShare.localShareUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="backend-link"
+                      >
+                        {latestShare.localShareUrl}
+                      </a>
+
+                      {latestShare.embedUrl && (
+                        <details className="backend-raw">
+                          <summary>查看 Embed URL</summary>
+                          <pre>{latestShare.embedUrl}</pre>
+                        </details>
                       )}
                     </div>
+                  ) : !latestJobResult ? (
+                    <p className="backend-auth-hint">
+                      当前还没有 AI 生成结果或分享记录。Studio 会严格按 `assets/uploads`、
+                      `drawing-jobs`、`drawing-jobs/{'{jobId}'}` 这条后端链路执行。
+                    </p>
                   ) : (
                     <p className="backend-auth-hint">
-                      当前还没有 AI 生成结果。Studio 会严格按 `assets/uploads`、`drawing-jobs`、
-                      `drawing-jobs/{'{jobId}'}` 这条后端链路执行。
+                      当前还没有分享记录。运行脚本后可直接点击“发布当前分享”生成公开链接。
                     </p>
                   )}
                 </article>
