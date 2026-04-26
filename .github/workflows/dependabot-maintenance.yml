@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/dependabot-maintenance.yml"
       - "scripts/fix-dependabot-alerts.js"
   workflow_dispatch:
     inputs:
