@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: build-${{ github.ref }}
@@ -75,8 +76,18 @@ jobs:
           restore-keys: |
             rust-${{ runner.os }}-
 
-      - name: Build Rust backend
-        run: cargo check
+      - name: Build Rust backend release binary
+        run: cargo build --release --locked
+
+      - name: Upload Rust backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: geograba-rust-backend-${{ github.sha }}
+          path: |
+            backend/target/release/geograba-backend
+            backend/target/release/geograba-backend.d
+          if-no-files-found: error
+          retention-days: 14
 
   docker-images:
     runs-on: ubuntu-latest
@@ -99,13 +110,15 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build ${{ matrix.image_label }} image archive
-        run: |
-          docker buildx build \
-            --file Dockerfile \
-            --target ${{ matrix.docker_target }} \
-            --tag geograba:${{ matrix.image_label }}-${{ github.sha }} \
-            --output type=docker,dest=/tmp/${{ matrix.image_label }}.tar \
-            .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: ${{ matrix.docker_target }}
+          tags: geograba:${{ matrix.image_label }}-${{ github.sha }}
+          outputs: type=docker,dest=/tmp/${{ matrix.image_label }}.tar
+          cache-from: type=gha,scope=${{ matrix.image_label }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image_label }}
 
       - name: Upload ${{ matrix.image_label }} image artifact
         uses: actions/upload-artifact@v4
