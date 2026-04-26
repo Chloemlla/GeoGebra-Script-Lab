@@ -77,3 +77,40 @@ jobs:
 
       - name: Build Rust backend
         run: cargo check
+
+  docker-images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image_label: backend-only
+            docker_target: backend-runtime
+            artifact_prefix: geograba-backend-only-image
+          - image_label: fullstack
+            docker_target: fullstack-runtime
+            artifact_prefix: geograba-fullstack-image
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.image_label }} image archive
+        run: |
+          docker buildx build \
+            --file Dockerfile \
+            --target ${{ matrix.docker_target }} \
+            --tag geograba:${{ matrix.image_label }}-${{ github.sha }} \
+            --output type=docker,dest=/tmp/${{ matrix.image_label }}.tar \
+            .
+
+      - name: Upload ${{ matrix.image_label }} image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_prefix }}-${{ github.sha }}
+          path: /tmp/${{ matrix.image_label }}.tar
+          if-no-files-found: error
+          retention-days: 14

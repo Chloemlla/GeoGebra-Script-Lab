@@ -147,6 +147,41 @@
   justify-content: flex-end;
 }
 
+.global-route-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.global-route-button {
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.22s ease,
+    background-color 0.22s ease,
+    color 0.22s ease,
+    transform 0.22s ease;
+}
+
+.global-route-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(41, 151, 255, 0.32);
+}
+
+.global-route-button.active {
+  background: rgba(41, 151, 255, 0.18);
+  border-color: rgba(41, 151, 255, 0.32);
+  color: #ffffff;
+}
+
 .open-source-pill {
   display: inline-flex;
   align-items: center;
@@ -903,6 +938,12 @@
   color: #6e6e73;
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+.backend-page-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
 }
 
 .studio-btn:hover,

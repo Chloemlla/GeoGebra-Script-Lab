@@ -25,7 +25,7 @@ COPY backend/src ./src
 
 RUN cargo build --locked --release
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim AS runtime-base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
@@ -34,11 +34,9 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=backend-build /app/backend/target/release/geograba-backend /usr/local/bin/geograba-backend
-COPY --from=frontend-build /app/dist ./frontend-dist
 
 ENV BIND_ADDR=0.0.0.0:8080 \
     API_BASE_URL=http://localhost:8080 \
-    FRONTEND_DIST_DIR=/app/frontend-dist \
     MONGODB_URI= \
     MONGODB_DATABASE=geograba \
     MODEL_BASE_URL=https://api.openai.com/v1 \
@@ -46,5 +44,19 @@ ENV BIND_ADDR=0.0.0.0:8080 \
     API_KEY=
 
 EXPOSE 8080
+
+FROM runtime-base AS backend-runtime
+
+CMD ["geograba-backend"]
+
+FROM runtime-base AS fullstack-runtime
+
+COPY --from=frontend-build /app/dist ./frontend-dist
+
+ENV FRONTEND_DIST_DIR=/app/frontend-dist
+
+CMD ["geograba-backend"]
+
+FROM fullstack-runtime AS runtime
 
 CMD ["geograba-backend"]

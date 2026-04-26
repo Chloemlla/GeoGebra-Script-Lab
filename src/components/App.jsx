@@ -10,14 +10,15 @@ import React, {
 import GeoGebraContainer from './GeoGebraContainer';
 import CodeEditor from './CodeEditor';
 import ControlPanel from './ControlPanel';
-import AdminConsole from './AdminConsole';
 import AuthPanel from './AuthPanel';
-import BackendPanel from './BackendPanel';
 import LogPanel from './LogPanel';
 import AppIcon from './AppIcon';
+import AppBackendPage from './AppBackendPage';
+import AppOverviewPage from './AppOverviewPage';
 import GeoGebraEngine from '../engine/GeoGebraEngine';
 import Preprocessor from '../engine/Preprocessor';
 import Dispatcher from '../engine/Dispatcher';
+import useAppRoute from '../hooks/useAppRoute';
 import {
   createAnnotationJob,
   clearAuthToken,
@@ -79,6 +80,7 @@ import {
   upsertProject,
   writeStudioState,
 } from '../utils/studio';
+import { APP_PAGE_IDS, APP_PAGES } from '../utils/appRoutes';
 import { Analytics } from '@vercel/analytics/react';
 import './App.css';
 
@@ -155,6 +157,8 @@ tip = Text("观察原图、平移图与旋转图", (-3, -1))`,
 
 const MOBILE_BREAKPOINT = 1024;
 const PHONE_BREAKPOINT = 480;
+const AUTO_CLOUD_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const CLOUD_SYNC_TOGGLE_STORAGE_KEY = 'geograba-cloud-sync-enabled';
 const DEFAULT_CANVAS_MODE_ID = 'geometry';
 const DEFAULT_GENERATION_PROMPT = '识别图中的几何关系并输出可执行的 GeoGebra commands';
 const DEFAULT_PROJECT_TITLE = '未命名项目';
@@ -525,10 +529,22 @@ const buildShareTitle = (value, fallback) => {
 };
 
 const dataUrlToFile = async (dataUrl, filename) => {
-  const response = await fetch(dataUrl);
-  const blob = await response.blob();
-  return new File([blob], filename, {
-    type: blob.type || 'image/png',
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+    throw new Error('Invalid data URL');
+  }
+
+  const [header, payload] = dataUrl.split(',', 2);
+  if (!header || payload === undefined) {
+    throw new Error('Malformed data URL');
+  }
+
+  const mimeType = header.match(/^data:([^;]+)/)?.[1] || 'image/png';
+  const isBase64 = header.includes(';base64');
+  const binary = isBase64 ? atob(payload) : decodeURIComponent(payload);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+
+  return new File([bytes], filename, {
+    type: mimeType,
   });
 };
 
@@ -676,6 +692,13 @@ const App = () => {
   const [isAdminAutoRefresh, setIsAdminAutoRefresh] = useState(true);
   const [savedProjects, setSavedProjects] = useState(storedStudioState.projects);
   const [currentProjectId, setCurrentProjectId] = useState(storedCurrentProject?.id ?? null);
+  const [isCloudSyncEnabled, setIsCloudSyncEnabled] = useState(() => {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return false;
+    }
+
+    return window.localStorage.getItem(CLOUD_SYNC_TOGGLE_STORAGE_KEY) === 'true';
+  });
   const [cloudSyncState, setCloudSyncState] = useState({
     state: storedAuthSession?.token ? 'idle' : 'neutral',
     message: storedAuthSession?.token ? '等待恢复云同步能力' : '登录后启用云同步与导出队列',
@@ -776,6 +799,7 @@ const App = () => {
       : null
   );
   const hasLoadedInitialShareRef = useRef(false);
+  const { currentPage, navigateToPage } = useAppRoute();
   const deferredCode = useDeferredValue(code);
   const selectedCanvasMode = useMemo(
     () => CANVAS_MODES.find((mode) => mode.id === selectedCanvasModeId) ?? CANVAS_MODES[0],
@@ -850,6 +874,7 @@ const App = () => {
       : cloudSyncState.state === 'syncing'
       ? 'accent'
       : 'neutral';
+  const cloudSyncModeLabel = isCloudSyncEnabled ? '每 5 分钟自动同步' : '云端同步已关闭';
   const focusObjectNames =
     selectedStyleNames.length > 0
       ? selectedStyleNames
@@ -1084,13 +1109,6 @@ const App = () => {
       clearAuthentication(fallbackMessage, 'error');
       focusAuthentication('', 'login');
       return true;
-      if (error?.status !== 401) {
-        return false;
-      }
-
-      clearAuthentication(fallbackMessage, 'error');
-      focusAuthentication('', 'login');
-      return true;
     },
     [clearAuthentication, focusAuthentication]
   );
@@ -1250,6 +1268,104 @@ const App = () => {
     },
     [commitProjects, isAuthenticated, savedProjects]
   );
+
+  const hydrateProjectsFromCloud = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!isAuthenticated || !currentUser?.userId) {
+        return;
+      }
+
+      setCloudSyncState((prev) => ({
+        ...prev,
+        state: 'syncing',
+        message: silent ? '正在同步云端项目空间' : '正在拉取云端项目空间',
+      }));
+
+      const remoteProjects = await listProjects();
+      const localMap = new Map(savedProjects.map((project) => [project.id, project]));
+      const mergedProjects = [...savedProjects];
+
+      remoteProjects.forEach((remoteProject) => {
+        const localProject = localMap.get(remoteProject.projectId) ?? null;
+        const hydrated = hydrateProjectFromApi(remoteProject, localProject);
+        const shouldReplace =
+          !localProject
+          || new Date(remoteProject.updatedAt).getTime() >= new Date(localProject.updatedAt || 0).getTime();
+
+        if (!localProject) {
+          mergedProjects.push(hydrated);
+        } else if (shouldReplace) {
+          const index = mergedProjects.findIndex((project) => project.id === hydrated.id);
+          if (index >= 0) {
+            mergedProjects[index] = {
+              ...mergedProjects[index],
+              ...hydrated,
+            };
+          }
+        }
+      });
+
+      const nextProjects = mergedProjects.reduce((acc, project) => upsertProject(acc, project), []);
+      const nextCurrentProjectId = currentProjectId ?? nextProjects[0]?.id ?? null;
+      commitProjects(nextProjects, nextCurrentProjectId);
+
+      if (nextCurrentProjectId) {
+        void hydrateProjectVersionsFromCloud(nextCurrentProjectId);
+      }
+
+      setCloudSyncState((prev) => ({
+        ...prev,
+        state: 'synced',
+        message: `云端项目空间已同步 ${remoteProjects.length} 个项目`,
+        lastSyncedAt: new Date().toISOString(),
+      }));
+    },
+    [
+      commitProjects,
+      currentProjectId,
+      currentUser?.userId,
+      hydrateProjectVersionsFromCloud,
+      isAuthenticated,
+      savedProjects,
+    ]
+  );
+
+  const handleManualCloudSync = useCallback(async ({ silent = false } = {}) => {
+    if (!ensureAuthenticatedForAction('请先登录后再同步云端项目')) {
+      return;
+    }
+
+    try {
+      if (currentProjectId) {
+        const project = saveProjectRecord({
+          trigger: 'manual_sync',
+          markOpened: true,
+        });
+        await syncProjectToCloud({
+          project,
+          trigger: 'manual_sync',
+        });
+      }
+
+      await hydrateProjectsFromCloud({ silent: true });
+      if (!silent) {
+        pushUiNotice('云端项目同步完成', 'success');
+      }
+    } catch (error) {
+      if (error?.status !== 401) {
+        if (!silent) {
+          pushUiNotice(error.message, 'danger');
+        }
+      }
+    }
+  }, [
+    currentProjectId,
+    ensureAuthenticatedForAction,
+    hydrateProjectsFromCloud,
+    pushUiNotice,
+    saveProjectRecord,
+    syncProjectToCloud,
+  ]);
 
   const refreshTeams = useCallback(async () => {
     if (!isAuthenticated) {
@@ -1695,15 +1811,17 @@ const App = () => {
           versionLabel,
           trigger: 'execution',
         });
-        void syncProjectToCloud({
-          project: nextProject,
-          versionLabel,
-          trigger: 'execution',
-        }).catch((error) => {
-          if (error?.status !== 401) {
-            pushUiNotice(error.message, 'danger');
-          }
-        });
+        if (isCloudSyncEnabled) {
+          void syncProjectToCloud({
+            project: nextProject,
+            versionLabel,
+            trigger: 'execution',
+          }).catch((error) => {
+            if (error?.status !== 401) {
+              pushUiNotice(error.message, 'danger');
+            }
+          });
+        }
       }
 
       return true;
@@ -1715,6 +1833,7 @@ const App = () => {
       pushUiNotice,
       refreshCanvasObjects,
       saveProjectRecord,
+      isCloudSyncEnabled,
       syncProjectToCloud,
     ]
   );
@@ -2296,7 +2415,9 @@ const App = () => {
       }
 
       appendLog(`已打开项目：${project.title}`, 'info');
-      void hydrateProjectVersionsFromCloud(project.id);
+      if (isCloudSyncEnabled) {
+        void hydrateProjectVersionsFromCloud(project.id);
+      }
       if (isCompactLayout) {
         setActiveTab('code');
       }
@@ -2312,6 +2433,7 @@ const App = () => {
       savedProjects,
       selectedCanvasModeId,
       hydrateProjectVersionsFromCloud,
+      isCloudSyncEnabled,
     ]
   );
 
@@ -2359,6 +2481,11 @@ const App = () => {
       return;
     }
 
+    if (!isCloudSyncEnabled) {
+      pushUiNotice('云端自动同步已关闭，可使用“立即同步”手动上传', 'info');
+      return;
+    }
+
     void syncProjectToCloud({
       project,
       versionLabel: '手动保存',
@@ -2368,7 +2495,7 @@ const App = () => {
         pushUiNotice(error.message, 'danger');
       }
     });
-  }, [appendLog, isAuthenticated, pushUiNotice, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
+  }, [appendLog, isAuthenticated, isCloudSyncEnabled, pushUiNotice, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
 
   const handleSaveSnapshot = useCallback(() => {
     const project = saveProjectRecord({
@@ -2383,6 +2510,11 @@ const App = () => {
       return;
     }
 
+    if (!isCloudSyncEnabled) {
+      pushUiNotice('云端自动同步已关闭，可使用“立即同步”手动上传', 'info');
+      return;
+    }
+
     void syncProjectToCloud({
       project,
       versionLabel: '手动快照',
@@ -2392,7 +2524,7 @@ const App = () => {
         pushUiNotice(error.message, 'danger');
       }
     });
-  }, [appendLog, isAuthenticated, pushUiNotice, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
+  }, [appendLog, isAuthenticated, isCloudSyncEnabled, pushUiNotice, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
 
   const applyVersionState = useCallback(
     (version, cursor) => {
@@ -2585,26 +2717,28 @@ const App = () => {
       versionLabel: '同步自由点',
       trigger: 'canvas_sync',
     });
-    void syncProjectToCloud({
-      project: {
-        ...(savedProjects.find((project) => project.id === currentProjectId) ?? createProjectRecord()),
-        id: currentProjectId,
-        title: projectDraft.title.trim() || DEFAULT_PROJECT_TITLE,
-        folder: projectDraft.folder.trim() || DEFAULT_PROJECT_FOLDER,
-        tags: parseTagsInput(projectDraft.tagsInput),
-        isFavorite: projectDraft.isFavorite,
-        canvasModeId: selectedCanvasModeId,
-        code: nextCode,
-        updatedAt: new Date().toISOString(),
-        lastOpenedAt: new Date().toISOString(),
-      },
-      versionLabel: '同步自由点',
-      trigger: 'canvas_sync',
-    }).catch((error) => {
-      if (error?.status !== 401) {
-        pushUiNotice(error.message, 'danger');
-      }
-    });
+    if (isCloudSyncEnabled) {
+      void syncProjectToCloud({
+        project: {
+          ...(savedProjects.find((project) => project.id === currentProjectId) ?? createProjectRecord()),
+          id: currentProjectId,
+          title: projectDraft.title.trim() || DEFAULT_PROJECT_TITLE,
+          folder: projectDraft.folder.trim() || DEFAULT_PROJECT_FOLDER,
+          tags: parseTagsInput(projectDraft.tagsInput),
+          isFavorite: projectDraft.isFavorite,
+          canvasModeId: selectedCanvasModeId,
+          code: nextCode,
+          updatedAt: new Date().toISOString(),
+          lastOpenedAt: new Date().toISOString(),
+        },
+        versionLabel: '同步自由点',
+        trigger: 'canvas_sync',
+      }).catch((error) => {
+        if (error?.status !== 401) {
+          pushUiNotice(error.message, 'danger');
+        }
+      });
+    }
     setActiveTab('code');
     appendLog(
       `已同步自由点：${pointStates.map((state) => state.name).join(', ')}`,
@@ -2626,6 +2760,7 @@ const App = () => {
     projectDraft.tagsInput,
     projectDraft.title,
     pushUiNotice,
+    isCloudSyncEnabled,
     syncProjectToCloud,
   ]);
 
@@ -3144,8 +3279,18 @@ const App = () => {
       setCloudSyncState((prev) => ({
         ...prev,
         state: 'idle',
-        message: '登录后启用云同步与导出队列',
+        message: '登录后可手动同步云端项目',
         lastSyncedAt: null,
+      }));
+      return;
+    }
+
+    if (!isCloudSyncEnabled) {
+      lastHydratedCloudUserIdRef.current = null;
+      setCloudSyncState((prev) => ({
+        ...prev,
+        state: 'idle',
+        message: '云端同步已关闭，可手动同步或启用每 5 分钟自动同步',
       }));
       return;
     }
@@ -3156,77 +3301,22 @@ const App = () => {
 
     lastHydratedCloudUserIdRef.current = currentUser.userId;
     let isCancelled = false;
+    void hydrateProjectsFromCloud().catch((error) => {
+      if (isCancelled) {
+        return;
+      }
 
-    const hydrateProjectsFromCloud = async () => {
       setCloudSyncState((prev) => ({
         ...prev,
-        state: 'syncing',
-        message: '正在拉取云端项目空间',
+        state: 'error',
+        message: error.message,
       }));
-
-      try {
-        const remoteProjects = await listProjects();
-        if (isCancelled) {
-          return;
-        }
-
-        const localMap = new Map(savedProjects.map((project) => [project.id, project]));
-        const mergedProjects = [...savedProjects];
-
-        remoteProjects.forEach((remoteProject) => {
-          const localProject = localMap.get(remoteProject.projectId) ?? null;
-          const hydrated = hydrateProjectFromApi(remoteProject, localProject);
-          const shouldReplace =
-            !localProject
-            || new Date(remoteProject.updatedAt).getTime() >= new Date(localProject.updatedAt || 0).getTime();
-
-          if (!localProject) {
-            mergedProjects.push(hydrated);
-          } else if (shouldReplace) {
-            const index = mergedProjects.findIndex((project) => project.id === hydrated.id);
-            if (index >= 0) {
-              mergedProjects[index] = {
-                ...mergedProjects[index],
-                ...hydrated,
-              };
-            }
-          }
-        });
-
-        const nextProjects = mergedProjects
-          .reduce((acc, project) => upsertProject(acc, project), []);
-        const nextCurrentProjectId = currentProjectId ?? nextProjects[0]?.id ?? null;
-        commitProjects(nextProjects, nextCurrentProjectId);
-
-        if (nextCurrentProjectId) {
-          void hydrateProjectVersionsFromCloud(nextCurrentProjectId);
-        }
-
-        setCloudSyncState((prev) => ({
-          ...prev,
-          state: 'synced',
-          message: `云端项目空间已同步 ${remoteProjects.length} 个项目`,
-          lastSyncedAt: new Date().toISOString(),
-        }));
-      } catch (error) {
-        if (isCancelled) {
-          return;
-        }
-
-        setCloudSyncState((prev) => ({
-          ...prev,
-          state: 'error',
-          message: error.message,
-        }));
-      }
-    };
-
-    void hydrateProjectsFromCloud();
+    });
 
     return () => {
       isCancelled = true;
     };
-  }, [commitProjects, currentProjectId, currentUser?.userId, hydrateProjectVersionsFromCloud, isAuthenticated, savedProjects]);
+  }, [currentUser?.userId, hydrateProjectsFromCloud, isAuthenticated, isCloudSyncEnabled]);
 
   useEffect(() => {
     void refreshTeams();
@@ -3251,7 +3341,7 @@ const App = () => {
 
     const timer = window.setTimeout(() => {
       const project = saveProjectRecord();
-      if (isAuthenticated) {
+      if (isAuthenticated && isCloudSyncEnabled) {
         void syncProjectToCloud({
           project,
         }).catch(() => {});
@@ -3268,9 +3358,22 @@ const App = () => {
     saveProjectRecord,
     selectedCanvasModeId,
     isAuthenticated,
+    isCloudSyncEnabled,
     syncProjectToCloud,
     versionCursor,
   ]);
+
+  useEffect(() => {
+    if (!isCloudSyncEnabled || !isAuthenticated) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      void handleManualCloudSync({ silent: true });
+    }, AUTO_CLOUD_SYNC_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [handleManualCloudSync, isAuthenticated, isCloudSyncEnabled]);
 
   useEffect(() => {
     setParameterValues((prev) => {
@@ -3504,6 +3607,17 @@ const App = () => {
   }, [isCanvasLocked]);
 
   useEffect(() => {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      CLOUD_SYNC_TOGGLE_STORAGE_KEY,
+      isCloudSyncEnabled ? 'true' : 'false'
+    );
+  }, [isCloudSyncEnabled]);
+
+  useEffect(() => {
     const unsubscribe = GeoGebraEngine.onManualChange(({ labels }) => {
       if (isExecutingRef.current) {
         return;
@@ -3588,6 +3702,18 @@ const App = () => {
             </a>
 
             <div className="global-nav-meta">
+              <div className="global-route-nav" role="tablist" aria-label="页面导航">
+                {APP_PAGES.map((page) => (
+                  <button
+                    key={page.id}
+                    type="button"
+                    className={`global-route-button ${currentPage.id === page.id ? 'active' : ''}`}
+                    onClick={() => navigateToPage(page.id)}
+                  >
+                    {page.label}
+                  </button>
+                ))}
+              </div>
               <span className="nav-pill">{selectedCanvasMode.label}</span>
               <span className={`nav-pill nav-pill-${authTone}`}>{authStatusText}</span>
               <span className={`nav-pill nav-pill-${backendTone}`}>{backendStatusText}</span>
@@ -3633,198 +3759,29 @@ const App = () => {
           />
         </div>
 
-        <section className="chapter chapter-dark">
-          <header className="hero-panel">
-            <div className="hero-copy">
-              <span className="hero-eyebrow">Scripted Geometry</span>
-              <h1>几何脚本与画布联动工作台</h1>
-              <p className="hero-description">
-                用代码描述几何关系，在右侧即时验证图形，再把拖拽后的自由点同步回脚本。
-                整个界面按展示区与工作区两段组织，保留原有运行、导出、切换画布和日志能力。
-              </p>
+        {currentPage.id === APP_PAGE_IDS.overview && (
+          <AppOverviewPage
+            selectedCanvasMode={selectedCanvasMode}
+            recentRunStatus={recentRunStatus}
+            recentRunTone={recentRunTone}
+            isExecuting={isExecuting}
+            executionStats={executionStats}
+            canvasDrift={canvasDrift}
+            changedPointCount={changedPointCount}
+            isCanvasLocked={isCanvasLocked}
+            formatDuration={formatDuration}
+            successRate={successRate}
+            handleRun={handleRun}
+            handleLoadSnippet={handleLoadSnippet}
+            starterSnippets={STARTER_SNIPPETS}
+            workflowSteps={WORKFLOW_STEPS}
+            overviewMetrics={overviewMetrics}
+            commercializationPriorities={COMMERCIALIZATION_PRIORITIES}
+            commercializationFlow={COMMERCIALIZATION_FLOW}
+          />
+        )}
 
-              <div className="hero-actions">
-                <button
-                  type="button"
-                  className="hero-btn hero-btn-primary"
-                  onClick={handleRun}
-                  disabled={isExecuting}
-                >
-                  {isExecuting ? '正在执行...' : '运行当前脚本'}
-                </button>
-                <button
-                  type="button"
-                  className="hero-btn hero-btn-secondary"
-                  onClick={() => handleLoadSnippet(STARTER_SNIPPETS[0])}
-                >
-                  载入基础示例
-                </button>
-              </div>
-
-              <div className="hero-tags">
-                <span className="hero-tag">Monaco 编辑器</span>
-                <span className="hero-tag">{selectedCanvasMode.label}</span>
-                <span className="hero-tag">自由点同步回写</span>
-                <span className="hero-tag">UTF-8 中文支持</span>
-              </div>
-            </div>
-
-            <div className="hero-side">
-              <article className="hero-status-card">
-                <span className="card-kicker">运行状态</span>
-                <strong>{recentRunStatus}</strong>
-                <p>{selectedCanvasMode.stageTip}</p>
-                <div className="hero-status-row">
-                  <span className={`status-chip status-chip-${recentRunTone}`}>
-                    {isExecuting
-                      ? '执行中'
-                      : executionStats
-                      ? executionStats.success
-                        ? '运行成功'
-                        : '运行异常'
-                      : '等待运行'}
-                  </span>
-                  <span className={`status-chip status-chip-${syncTone}`}>
-                    {canvasDrift.isDirty ? '待同步' : isCanvasLocked ? '拖拽锁定' : '可拖拽'}
-                  </span>
-                </div>
-              </article>
-
-              <article className="hero-status-card hero-checklist-card">
-                <span className="card-kicker">推荐工作流</span>
-                <ul className="workflow-list">
-                  {WORKFLOW_STEPS.map((step) => (
-                    <li key={step}>{step}</li>
-                  ))}
-                </ul>
-              </article>
-
-              <article className="hero-status-card hero-brief-card">
-                <span className="card-kicker">会话概览</span>
-                <div className="hero-brief-grid">
-                  <div className="hero-brief-item">
-                    <span>画布</span>
-                    <strong>{selectedCanvasMode.label}</strong>
-                    <small>{selectedCanvasMode.shortHint}</small>
-                  </div>
-                  <div className="hero-brief-item">
-                    <span>同步</span>
-                    <strong>{canvasDrift.isDirty ? `${changedPointCount} 点待同步` : '代码一致'}</strong>
-                    <small>{isCanvasLocked ? '当前锁定拖拽' : '当前支持自由拖拽'}</small>
-                  </div>
-                  <div className="hero-brief-item">
-                    <span>运行耗时</span>
-                    <strong>{formatDuration(executionStats?.executionTime)}</strong>
-                    <small>{successRate} 成功率</small>
-                  </div>
-                </div>
-              </article>
-            </div>
-          </header>
-        </section>
-
-        <section className="chapter chapter-light">
-          <div className="chapter-header">
-            <div>
-              <span className="section-kicker">Overview</span>
-              <h2>展示区与工作区分离</h2>
-            </div>
-          </div>
-
-          <div className="metric-grid">
-            {overviewMetrics.map((metric) => (
-              <article key={metric.label} className="metric-card">
-                <span className="metric-label">{metric.label}</span>
-                <strong className="metric-value">{metric.value}</strong>
-                <p className="metric-caption">{metric.caption}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="chapter chapter-white starter-section">
-          <div className="starter-intro">
-            <div>
-              <span className="section-kicker">Starter Scenes</span>
-              <h2>示例模板</h2>
-            </div>
-          </div>
-
-          <div className="starter-grid">
-            {STARTER_SNIPPETS.map((snippet) => (
-              <button
-                key={snippet.id}
-                type="button"
-                className="starter-card"
-                onClick={() => handleLoadSnippet(snippet)}
-              >
-                <span className="starter-eyebrow">{snippet.eyebrow}</span>
-                <strong>{snippet.title}</strong>
-                <p>{snippet.description}</p>
-                <span className="starter-action">载入这个示例</span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="chapter chapter-light strategy-section">
-          <div className="chapter-header">
-            <div>
-              <span className="section-kicker">Commercial Plan</span>
-              <h2>商业化功能优先级</h2>
-              <p>
-                真正能带来收入的不是单纯多几个按钮，而是把“上传图片
-                → AI 生成命令 → 前端渲染 → 分享传播”这条链路打成一个可复用工作流。
-              </p>
-            </div>
-
-            <article className="strategy-note-card">
-              <span className="card-kicker">优先原则</span>
-              <strong>先做高频出图，再做传播，再做团队资产化</strong>
-              <p>
-                如果一开始就堆协作、评论、组织架构，用户不会马上付费。先把 AI
-                生图到脚本这件事做到稳定，才有商业价值。
-              </p>
-            </article>
-          </div>
-
-          <div className="strategy-grid">
-            {COMMERCIALIZATION_PRIORITIES.map((item) => (
-              <article key={item.id} className="strategy-card">
-                <div className="strategy-card-top">
-                  <span className="strategy-stage">{item.stage}</span>
-                  <span className="strategy-title">{item.title}</span>
-                </div>
-                <p className="strategy-value">{item.value}</p>
-                <div className="strategy-copy">
-                  <strong>实现方式</strong>
-                  <p>{item.implementation}</p>
-                </div>
-                <div className="strategy-copy">
-                  <strong>收费方式</strong>
-                  <p>{item.monetization}</p>
-                </div>
-                <div className="strategy-copy">
-                  <strong>核心指标</strong>
-                  <p>{item.kpi}</p>
-                </div>
-              </article>
-            ))}
-          </div>
-
-          <article className="strategy-flow-card">
-            <div>
-              <span className="card-kicker">Growth Loop</span>
-              <strong>推荐先落地的最小商业闭环</strong>
-            </div>
-            <ol className="strategy-flow-list">
-              {COMMERCIALIZATION_FLOW.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ol>
-          </article>
-        </section>
-
+        {currentPage.id === APP_PAGE_IDS.studio && (
         <main
           ref={workspaceShellRef}
           className={`workspace-shell ${presentationMode ? 'presentation-mode' : ''}`}
@@ -4001,6 +3958,8 @@ const App = () => {
                         {cloudSyncState.message}
                       </span>
                       <small>
+                        {cloudSyncModeLabel}
+                        {' · '}
                         {isAuthenticated
                           ? `当前账号：${authUserLabel}`
                           : '当前仍处于本地工作区模式'}
@@ -4008,6 +3967,23 @@ const App = () => {
                           ? ` · 最近同步 ${new Date(cloudSyncState.lastSyncedAt).toLocaleString('zh-CN')}`
                           : ''}
                       </small>
+                      <div className="studio-action-row">
+                        <button
+                          type="button"
+                          className={`studio-btn ${isCloudSyncEnabled ? 'studio-btn-primary' : ''}`}
+                          onClick={() => setIsCloudSyncEnabled((prev) => !prev)}
+                        >
+                          {isCloudSyncEnabled ? '关闭自动同步' : '启用自动同步'}
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-btn"
+                          onClick={() => void handleManualCloudSync()}
+                          disabled={!isAuthenticated || cloudSyncState.state === 'syncing'}
+                        >
+                          立即同步
+                        </button>
+                      </div>
                     </div>
 
                     <div className="studio-list">
@@ -4234,37 +4210,6 @@ const App = () => {
                     )}
                   </article>
                 </div>
-
-              <BackendPanel
-                backendStatus={backendStatus}
-                prompt={generationPrompt}
-                onPromptChange={setGenerationPrompt}
-                selectedFile={referenceFile}
-                onFileChange={handleReferenceFileChange}
-                onGenerate={handleGenerateFromBackend}
-                onPublish={handlePublishShare}
-                onRequireAuth={() => focusAuthentication('登录后即可调用后端 Bridge 能力')}
-                latestJobResult={latestJobResult}
-                latestShare={latestShare}
-                activeShareSlug={activeShareSlug}
-                isAuthenticated={isAuthenticated}
-                authUserLabel={authUserLabel}
-                canPublish={canPublishShare}
-                isGenerating={isGeneratingScript}
-                isPublishing={isPublishingShare}
-              />
-
-                <AdminConsole
-                  backendStatus={backendStatus}
-                  adminDashboard={adminDashboard}
-                  adminState={adminState}
-                  onRefresh={() => {
-                    void refreshAdminDashboard();
-                  }}
-                  autoRefresh={isAdminAutoRefresh}
-                  onToggleAutoRefresh={() => setIsAdminAutoRefresh((prev) => !prev)}
-                />
-
                 <CodeEditor
                   value={code}
                   onChange={setCode}
@@ -5012,6 +4957,33 @@ const App = () => {
             </section>
           </div>
         </main>
+        )}
+
+        {currentPage.id === APP_PAGE_IDS.backend && (
+          <AppBackendPage
+            backendStatus={backendStatus}
+            generationPrompt={generationPrompt}
+            setGenerationPrompt={setGenerationPrompt}
+            referenceFile={referenceFile}
+            handleReferenceFileChange={handleReferenceFileChange}
+            handleGenerateFromBackend={handleGenerateFromBackend}
+            handlePublishShare={handlePublishShare}
+            focusAuthentication={focusAuthentication}
+            latestJobResult={latestJobResult}
+            latestShare={latestShare}
+            activeShareSlug={activeShareSlug}
+            isAuthenticated={isAuthenticated}
+            authUserLabel={authUserLabel}
+            canPublishShare={canPublishShare}
+            isGeneratingScript={isGeneratingScript}
+            isPublishingShare={isPublishingShare}
+            adminDashboard={adminDashboard}
+            adminState={adminState}
+            refreshAdminDashboard={refreshAdminDashboard}
+            isAdminAutoRefresh={isAdminAutoRefresh}
+            setIsAdminAutoRefresh={setIsAdminAutoRefresh}
+          />
+        )}
 
         <footer className="app-footer">
           <p>GeoGebra 交互式绘图系统 · React + Monaco Editor + GeoGebra Web API</p>

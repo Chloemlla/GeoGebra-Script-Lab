@@ -301,7 +301,45 @@ function formatRustChange(change) {
   return `${dependencyLabel} (${getRustDependencyField(change.section)}) ${change.beforeRange ?? '<missing>'} -> ${change.afterRange ?? '<removed>'}`;
 }
 
-function buildLatestRustVersionSpec(currentVersionSpec, latestVersion) {
+function parseSimpleRustVersion(version) {
+  const match = `${version}`.trim().match(/^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.+-]+)?$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    major: Number.parseInt(match[1], 10),
+    minor: Number.parseInt(match[2], 10),
+    patch: Number.parseInt(match[3], 10),
+    raw: match[0],
+  };
+}
+
+function compareSimpleRustVersions(leftVersion, rightVersion) {
+  if (leftVersion.major !== rightVersion.major) {
+    return leftVersion.major - rightVersion.major;
+  }
+
+  if (leftVersion.minor !== rightVersion.minor) {
+    return leftVersion.minor - rightVersion.minor;
+  }
+
+  return leftVersion.patch - rightVersion.patch;
+}
+
+function isCompatibleRustVersion(currentVersion, candidateVersion) {
+  if (currentVersion.major === 0) {
+    return (
+      candidateVersion.major === 0
+      && candidateVersion.minor === currentVersion.minor
+    );
+  }
+
+  return candidateVersion.major === currentVersion.major;
+}
+
+function buildLatestRustVersionSpec(currentVersionSpec, nextVersion) {
   const trimmedVersionSpec = currentVersionSpec.trim();
   const simpleVersionMatch = trimmedVersionSpec.match(/^([~^=]?)(\d+(?:\.\d+)*(?:-[0-9A-Za-z.+-]+)?)$/);
 
@@ -309,15 +347,34 @@ function buildLatestRustVersionSpec(currentVersionSpec, latestVersion) {
     return null;
   }
 
-  return `${simpleVersionMatch[1]}${latestVersion}`;
+  return `${simpleVersionMatch[1]}${nextVersion}`;
 }
 
-async function fetchLatestCrateVersion(crateName, versionCache) {
-  if (versionCache.has(crateName)) {
-    return versionCache.get(crateName);
+async function fetchLatestCompatibleCrateVersion(crateName, currentVersionSpec, versionCache) {
+  const normalizedVersionSpec = `${currentVersionSpec}`.trim();
+  const simpleVersionMatch = normalizedVersionSpec.match(/^[~^=]?(\d+\.\d+\.\d+|\d+\.\d+|\d+)$/);
+
+  if (!simpleVersionMatch) {
+    return null;
   }
 
-  const response = await fetch(`${CRATES_IO_API_ROOT}/${encodeURIComponent(crateName)}`, {
+  const currentVersionText = simpleVersionMatch[1]
+    .split('.')
+    .concat(['0', '0'])
+    .slice(0, 3)
+    .join('.');
+  const currentVersion = parseSimpleRustVersion(currentVersionText);
+
+  if (!currentVersion) {
+    return null;
+  }
+
+  const cacheKey = `${crateName}@${currentVersion.major}.${currentVersion.minor}`;
+  if (versionCache.has(cacheKey)) {
+    return versionCache.get(cacheKey);
+  }
+
+  const response = await fetch(`${CRATES_IO_API_ROOT}/${encodeURIComponent(crateName)}/versions`, {
     headers: {
       'user-agent': CRATES_IO_USER_AGENT,
       accept: 'application/json',
@@ -329,17 +386,24 @@ async function fetchLatestCrateVersion(crateName, versionCache) {
   }
 
   const payload = await response.json();
-  const latestVersion =
-    payload?.crate?.max_stable_version
-    ?? payload?.crate?.max_version
-    ?? payload?.crate?.newest_version
-    ?? null;
+  const latestVersion = (payload?.versions ?? [])
+    .filter((version) => version?.yanked !== true)
+    .map((version) => ({
+      raw: typeof version?.num === 'string' ? version.num.trim() : '',
+      parsed: parseSimpleRustVersion(version?.num),
+    }))
+    .filter((version) => version.raw.length > 0 && version.parsed)
+    .filter((version) => !version.raw.includes('-'))
+    .filter((version) => isCompatibleRustVersion(currentVersion, version.parsed))
+    .sort((left, right) => compareSimpleRustVersions(right.parsed, left.parsed))[0]?.raw ?? null;
 
   if (typeof latestVersion !== 'string' || latestVersion.trim().length === 0) {
-    throw new Error(`crates.io did not provide a usable latest version for ${crateName}.`);
+    throw new Error(
+      `crates.io did not provide a usable compatible version for ${crateName} within the ${currentVersion.major}.${currentVersion.minor} lane.`
+    );
   }
 
-  versionCache.set(crateName, latestVersion.trim());
+  versionCache.set(cacheKey, latestVersion.trim());
   return latestVersion.trim();
 }
 
@@ -479,10 +543,16 @@ async function runRustUpgrade(target) {
   let skippedRangeCount = 0;
 
   for (const dependencyEntry of target.dependencyEntries) {
-    const latestVersion = await fetchLatestCrateVersion(
+    const latestVersion = await fetchLatestCompatibleCrateVersion(
       dependencyEntry.crateName,
+      dependencyEntry.versionSpec,
       latestVersionCache
     );
+    if (!latestVersion) {
+      skippedRangeCount += 1;
+      continue;
+    }
+
     const nextVersionSpec = buildLatestRustVersionSpec(
       dependencyEntry.versionSpec,
       latestVersion
