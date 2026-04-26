@@ -8,9 +8,9 @@ use crate::error::AppError;
 use crate::state::AppState;
 use crate::threat_intel::SCAMALYTICS_SETTING_ID;
 use crate::types::{
-    AssetRecord, DrawingJobRecord, ExportJobRecord, ProjectRecord, ProjectVersionRecord,
-    IpThreatProviderConfigRecord, ReviewCommentRecord, SessionRecord, ShareRecord,
-    TeamMembershipRecord, TeamRecord, UploadedAsset, UserRecord,
+    AssetRecord, DrawingJobRecord, ExportJobRecord, IpThreatProviderConfigRecord, ProjectRecord,
+    ProjectVersionRecord, ReviewCommentRecord, SessionRecord, ShareRecord, TeamMembershipRecord,
+    TeamRecord, UploadedAsset, UserRecord,
 };
 
 const MAX_IN_MEMORY_ASSET_PAYLOAD_BYTES: usize = 512 * 1024;
@@ -757,16 +757,14 @@ pub async fn count_admin_users(state: &AppState) -> Result<u64, AppError> {
         return mongo_store.count_admin_users().await;
     }
 
-    Ok(
-        state
-            .store
-            .read()
-            .await
-            .users
-            .values()
-            .filter(|user| user.is_admin)
-            .count() as u64,
-    )
+    Ok(state
+        .store
+        .read()
+        .await
+        .users
+        .values()
+        .filter(|user| user.is_admin)
+        .count() as u64)
 }
 
 pub async fn count_users(state: &AppState) -> Result<u64, AppError> {

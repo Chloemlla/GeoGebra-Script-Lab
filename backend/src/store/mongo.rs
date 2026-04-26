@@ -11,9 +11,9 @@ use crate::error::AppError;
 use crate::metrics::MetricsRegistry;
 use crate::threat_intel::SCAMALYTICS_SETTING_ID;
 use crate::types::{
-    AssetRecord, DrawingJobRecord, ExportJobRecord, ProjectRecord, ProjectVersionRecord,
-    IpThreatProviderConfigRecord, ReviewCommentRecord, SessionRecord, ShareRecord,
-    TeamMembershipRecord, TeamRecord, UploadedAsset, UserRecord,
+    AssetRecord, DrawingJobRecord, ExportJobRecord, IpThreatProviderConfigRecord, ProjectRecord,
+    ProjectVersionRecord, ReviewCommentRecord, SessionRecord, ShareRecord, TeamMembershipRecord,
+    TeamRecord, UploadedAsset, UserRecord,
 };
 
 #[derive(Clone)]

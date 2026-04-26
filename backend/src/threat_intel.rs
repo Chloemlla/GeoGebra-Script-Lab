@@ -29,7 +29,9 @@ impl IpThreatClient {
             .pool_max_idle_per_host(8)
             .tcp_keepalive(Duration::from_secs(30))
             .build()
-            .map_err(|err| AppError::Internal(format!("unable to build IP threat client: {err}")))?;
+            .map_err(|err| {
+                AppError::Internal(format!("unable to build IP threat client: {err}"))
+            })?;
 
         Ok(Self { http })
     }
@@ -66,11 +68,14 @@ impl IpThreatClient {
         test_mode: bool,
         provider_config: &IpThreatProviderConfigRecord,
     ) -> Result<IpThreatLookupResponse, AppError> {
-        let ip = IpAddr::from_str(ip.trim())
-            .map_err(|_| AppError::BadRequest("ip must be a valid IPv4 or IPv6 address".to_string()))?;
+        let ip = IpAddr::from_str(ip.trim()).map_err(|_| {
+            AppError::BadRequest("ip must be a valid IPv4 or IPv6 address".to_string())
+        })?;
         let base_url = normalize_base_url(&provider_config.base_url)?;
-        let username = normalize_required_field(&provider_config.username, "IP threat provider username")?;
-        let api_key = normalize_required_field(&provider_config.api_key, "IP threat provider API key")?;
+        let username =
+            normalize_required_field(&provider_config.username, "IP threat provider username")?;
+        let api_key =
+            normalize_required_field(&provider_config.api_key, "IP threat provider API key")?;
 
         let mut endpoint = base_url
             .join(&format!("{username}/"))
@@ -84,12 +89,9 @@ impl IpThreatClient {
             }
         }
 
-        let response = self
-            .http
-            .get(endpoint)
-            .send()
-            .await
-            .map_err(|err| AppError::Unavailable(format!("IP threat provider request failed: {err}")))?;
+        let response = self.http.get(endpoint).send().await.map_err(|err| {
+            AppError::Unavailable(format!("IP threat provider request failed: {err}"))
+        })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -142,22 +144,30 @@ pub fn build_ip_threat_provider_config(
     payload: IpThreatConfigUpdateRequest,
     updated_by_user_id: &str,
 ) -> Result<IpThreatProviderConfigRecord, AppError> {
-    let base_url_input = payload
-        .base_url
-        .unwrap_or_else(|| existing.map(|record| record.base_url.clone()).unwrap_or_else(|| DEFAULT_SCAMALYTICS_BASE_URL.to_string()));
-    let username_input = payload
-        .username
-        .unwrap_or_else(|| existing.map(|record| record.username.clone()).unwrap_or_default());
-    let api_key_input = payload
-        .api_key
-        .unwrap_or_else(|| existing.map(|record| record.api_key.clone()).unwrap_or_default());
+    let base_url_input = payload.base_url.unwrap_or_else(|| {
+        existing
+            .map(|record| record.base_url.clone())
+            .unwrap_or_else(|| DEFAULT_SCAMALYTICS_BASE_URL.to_string())
+    });
+    let username_input = payload.username.unwrap_or_else(|| {
+        existing
+            .map(|record| record.username.clone())
+            .unwrap_or_default()
+    });
+    let api_key_input = payload.api_key.unwrap_or_else(|| {
+        existing
+            .map(|record| record.api_key.clone())
+            .unwrap_or_default()
+    });
 
     let base_url = normalize_base_url(&base_url_input)?
         .as_str()
         .trim_end_matches('/')
         .to_string();
-    let username = normalize_required_field(&username_input, "IP threat provider username")?.to_string();
-    let api_key = normalize_required_field(&api_key_input, "IP threat provider API key")?.to_string();
+    let username =
+        normalize_required_field(&username_input, "IP threat provider username")?.to_string();
+    let api_key =
+        normalize_required_field(&api_key_input, "IP threat provider API key")?.to_string();
 
     Ok(IpThreatProviderConfigRecord {
         setting_id: SCAMALYTICS_SETTING_ID.to_string(),
@@ -249,14 +259,12 @@ fn extract_summary_source<'a>(raw: &'a Value) -> Option<&'a Value> {
 }
 
 fn get_string(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(|item| match item {
-            Value::String(text) => Some(text.trim().to_string()).filter(|text| !text.is_empty()),
-            Value::Number(number) => Some(number.to_string()),
-            Value::Bool(flag) => Some(flag.to_string()),
-            _ => None,
-        })
+    value.get(key).and_then(|item| match item {
+        Value::String(text) => Some(text.trim().to_string()).filter(|text| !text.is_empty()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    })
 }
 
 fn get_i64(value: &Value, key: &str) -> Option<i64> {

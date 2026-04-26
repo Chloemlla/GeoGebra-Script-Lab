@@ -27,26 +27,27 @@ use crate::model::ModelClient;
 use crate::state::AppState;
 use crate::store::{
     cache_asset_payload, count_users, find_any_job_record, find_asset_payload, find_asset_record,
-    find_export_job_record, find_job_record, find_project_record, find_project_versions_by_project,
-    find_ip_threat_provider_config, find_review_comment_record, find_share_by_slug,
+    find_export_job_record, find_ip_threat_provider_config, find_job_record, find_project_record,
+    find_project_versions_by_project, find_review_comment_record, find_share_by_slug,
     find_team_record, find_user_by_email, find_user_by_id, find_user_by_username,
     list_projects_by_team, list_projects_by_user, list_projects_by_workspace,
     list_review_comments_by_project, list_team_memberships_by_team, list_teams_by_user,
     revoke_session_by_token, upsert_asset_record, upsert_export_job_record,
     upsert_ip_threat_provider_config, upsert_job_record, upsert_project_record,
-    upsert_project_version_record, upsert_review_comment_record, upsert_session_record, upsert_share_record,
-    upsert_team_membership_record, upsert_team_record, upsert_user_record,
+    upsert_project_version_record, upsert_review_comment_record, upsert_session_record,
+    upsert_share_record, upsert_team_membership_record, upsert_team_record, upsert_user_record,
 };
 use crate::threat_intel::build_ip_threat_provider_config;
 use crate::types::{
     AnnotationJobRequest, Diagnostics, DrawingJobCreateRequest, DrawingJobRecord,
-    DrawingJobResultResponse, ExportJobCreateRequest, ExportJobRecord, ExportJobStatus, JobStatus,
-    IpThreatConfigUpdateRequest, LoginRequest, ModelConfigUpdateRequest, ObjectExplanationRequest, ProjectCreateRequest,
-    ProjectRecord, ProjectUpdateRequest, ProjectVersionCreateRequest, ProjectVersionRecord,
-    ProjectVersionSummary, RegisterRequest, RenderHints, ReviewCommentCreateRequest,
-    ReviewCommentRecord, ReviewCommentUpdateRequest, ScriptInsightsRequest, ShareCreateRequest,
-    ShareRecord, TeamCreateRequest, TeamMemberCreateRequest, TeamMembershipRecord, TeamRecord,
-    TeamRole, UploadCreateRequest, UploadedAsset, UserRecord, Viewport,
+    DrawingJobResultResponse, ExportJobCreateRequest, ExportJobRecord, ExportJobStatus,
+    IpThreatConfigUpdateRequest, JobStatus, LoginRequest, ModelConfigUpdateRequest,
+    ObjectExplanationRequest, ProjectCreateRequest, ProjectRecord, ProjectUpdateRequest,
+    ProjectVersionCreateRequest, ProjectVersionRecord, ProjectVersionSummary, RegisterRequest,
+    RenderHints, ReviewCommentCreateRequest, ReviewCommentRecord, ReviewCommentUpdateRequest,
+    ScriptInsightsRequest, ShareCreateRequest, ShareRecord, TeamCreateRequest,
+    TeamMemberCreateRequest, TeamMembershipRecord, TeamRecord, TeamRole, UploadCreateRequest,
+    UploadedAsset, UserRecord, Viewport,
 };
 use crate::utils::{fallback_commands, request_id, short_id, short_id_suffix, slugify};
 
@@ -459,7 +460,12 @@ async fn lookup_ip_threat(
         .ok_or_else(|| AppError::BadRequest("ip query parameter is required".to_string()))?;
     let test_mode = params
         .get("test")
-        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false);
 
     let provider_config = find_ip_threat_provider_config(&state)
