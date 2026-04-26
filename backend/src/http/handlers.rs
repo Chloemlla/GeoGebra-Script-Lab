@@ -416,6 +416,11 @@ async fn update_ip_threat_config(
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
     let auth = require_admin(request.headers(), &state).await?;
+    if state.mongo_store.is_none() {
+        return Err(AppError::Unavailable(
+            "MongoDB must be enabled to persist IP threat provider config".to_string(),
+        ));
+    }
     let body = read_json(request).await?;
     let payload: IpThreatConfigUpdateRequest = serde_json::from_value(body)
         .map_err(|err| AppError::BadRequest(format!("invalid IP threat config body: {err}")))?;
