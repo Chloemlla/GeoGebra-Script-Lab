@@ -8,6 +8,11 @@ const AppBackendPage = ({
   setGenerationPrompt,
   referenceFile,
   handleReferenceFileChange,
+  ipThreatConfigDraft,
+  handleIpThreatConfigFieldChange,
+  handleSaveIpThreatConfig,
+  ipThreatConfigState,
+  isSavingIpThreatConfig,
   ipThreatDraft,
   handleIpThreatDraftChange,
   handleLookupIpThreat,
@@ -45,6 +50,11 @@ const AppBackendPage = ({
         onPromptChange={setGenerationPrompt}
         selectedFile={referenceFile}
         onFileChange={handleReferenceFileChange}
+        ipThreatConfigDraft={ipThreatConfigDraft}
+        onIpThreatConfigFieldChange={handleIpThreatConfigFieldChange}
+        onSaveIpThreatConfig={handleSaveIpThreatConfig}
+        ipThreatConfigState={ipThreatConfigState}
+        isSavingIpThreatConfig={isSavingIpThreatConfig}
         ipThreatDraft={ipThreatDraft}
         onIpThreatDraftChange={handleIpThreatDraftChange}
         onLookupIpThreat={handleLookupIpThreat}

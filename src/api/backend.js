@@ -131,6 +131,13 @@ export async function fetchIpThreatConfig() {
   return request('/api/v1/ip-threat/config');
 }
 
+export async function updateIpThreatConfig(payload) {
+  return request('/api/v1/ip-threat/config', {
+    method: 'PUT',
+    body: payload,
+  });
+}
+
 export async function lookupIpThreat({ ip, testMode = false }) {
   const query = new URLSearchParams();
   if (typeof ip === 'string' && ip.trim()) {

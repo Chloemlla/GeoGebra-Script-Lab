@@ -9,10 +9,11 @@ use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 use crate::metrics::MetricsRegistry;
+use crate::threat_intel::SCAMALYTICS_SETTING_ID;
 use crate::types::{
     AssetRecord, DrawingJobRecord, ExportJobRecord, ProjectRecord, ProjectVersionRecord,
-    ReviewCommentRecord, SessionRecord, ShareRecord, TeamMembershipRecord, TeamRecord,
-    UploadedAsset, UserRecord,
+    IpThreatProviderConfigRecord, ReviewCommentRecord, SessionRecord, ShareRecord,
+    TeamMembershipRecord, TeamRecord, UploadedAsset, UserRecord,
 };
 
 #[derive(Clone)]
@@ -29,6 +30,7 @@ pub struct MongoStore {
     review_comments: Collection<Document>,
     users: Collection<Document>,
     sessions: Collection<Document>,
+    app_settings: Collection<Document>,
     metrics: Arc<MetricsRegistry>,
 }
 
@@ -62,6 +64,7 @@ impl MongoStore {
             review_comments: database.collection("review_comments"),
             users: database.collection("users"),
             sessions: database.collection("sessions"),
+            app_settings: database.collection("app_settings"),
             metrics,
         };
         store.ensure_indexes().await?;
@@ -461,6 +464,31 @@ impl MongoStore {
             .await
     }
 
+    pub async fn upsert_ip_threat_provider_config(
+        &self,
+        record: &IpThreatProviderConfigRecord,
+    ) -> Result<(), AppError> {
+        self.upsert_record(
+            "upsert_ip_threat_provider_config",
+            &self.app_settings,
+            &record.setting_id,
+            record,
+        )
+        .await
+    }
+
+    pub async fn find_ip_threat_provider_config(
+        &self,
+    ) -> Result<Option<IpThreatProviderConfigRecord>, AppError> {
+        self.find_one_record(
+            "find_ip_threat_provider_config",
+            &self.app_settings,
+            doc! { "_id": SCAMALYTICS_SETTING_ID },
+            None,
+        )
+        .await
+    }
+
     pub async fn find_session_by_token(
         &self,
         token: &str,
@@ -580,6 +608,13 @@ impl MongoStore {
             &self.sessions,
             doc! { "token": 1 },
             "sessions_token_unique",
+        )
+        .await?;
+        self.create_unique_index(
+            "create_index_app_settings_provider",
+            &self.app_settings,
+            doc! { "provider": 1 },
+            "app_settings_provider_unique",
         )
         .await?;
         self.create_ttl_index(

@@ -1,26 +1,27 @@
+use chrono::Utc;
 use serde_json::Value;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::Duration;
 use url::Url;
 
-use crate::config::AppConfig;
 use crate::error::AppError;
-use crate::types::{IpThreatConfigView, IpThreatLookupResponse, IpThreatSummary};
+use crate::types::{
+    IpThreatConfigUpdateRequest, IpThreatConfigView, IpThreatLookupResponse,
+    IpThreatProviderConfigRecord, IpThreatSummary,
+};
+
+pub const DEFAULT_SCAMALYTICS_BASE_URL: &str = "https://api13.scamalytics.com/v3";
+pub const SCAMALYTICS_PROVIDER: &str = "scamalytics";
+pub const SCAMALYTICS_SETTING_ID: &str = "ip_threat_provider:scamalytics";
 
 #[derive(Clone)]
 pub struct IpThreatClient {
-    base_url: Url,
-    username: Option<String>,
-    api_key: Option<String>,
     http: reqwest::Client,
 }
 
 impl IpThreatClient {
-    pub fn new(config: &AppConfig) -> Result<Self, AppError> {
-        let base_url = Url::parse(&config.ip_threat_base_url)
-            .map_err(|err| AppError::BadRequest(format!("invalid IP threat base URL: {err}")))?;
-
+    pub fn new() -> Result<Self, AppError> {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
@@ -30,20 +31,32 @@ impl IpThreatClient {
             .build()
             .map_err(|err| AppError::Internal(format!("unable to build IP threat client: {err}")))?;
 
-        Ok(Self {
-            base_url,
-            username: normalize_secret(&config.ip_threat_username),
-            api_key: normalize_secret(&config.ip_threat_api_key),
-            http,
-        })
+        Ok(Self { http })
     }
 
-    pub fn view(&self) -> IpThreatConfigView {
+    pub fn view(&self, config: Option<&IpThreatProviderConfigRecord>) -> IpThreatConfigView {
+        let base_url = config
+            .map(|record| record.base_url.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(DEFAULT_SCAMALYTICS_BASE_URL)
+            .to_string();
+        let username = config
+            .map(|record| record.username.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        let api_key_set = config
+            .map(|record| !record.api_key.trim().is_empty())
+            .unwrap_or(false);
+
         IpThreatConfigView {
-            configured: self.username.is_some() && self.api_key.is_some(),
-            base_url: self.base_url.as_str().trim_end_matches('/').to_string(),
-            username_set: self.username.is_some(),
-            api_key_set: self.api_key.is_some(),
+            configured: !username.is_empty() && api_key_set,
+            base_url,
+            username: username.clone(),
+            username_set: !username.is_empty(),
+            api_key_set,
+            updated_at: config.map(|record| record.updated_at),
+            updated_by_user_id: config.map(|record| record.updated_by_user_id.clone()),
         }
     }
 
@@ -51,18 +64,15 @@ impl IpThreatClient {
         &self,
         ip: &str,
         test_mode: bool,
+        provider_config: &IpThreatProviderConfigRecord,
     ) -> Result<IpThreatLookupResponse, AppError> {
         let ip = IpAddr::from_str(ip.trim())
             .map_err(|_| AppError::BadRequest("ip must be a valid IPv4 or IPv6 address".to_string()))?;
-        let username = self.username.as_deref().ok_or_else(|| {
-            AppError::Unavailable("IP threat provider username is not configured".to_string())
-        })?;
-        let api_key = self.api_key.as_deref().ok_or_else(|| {
-            AppError::Unavailable("IP threat provider API key is not configured".to_string())
-        })?;
+        let base_url = normalize_base_url(&provider_config.base_url)?;
+        let username = normalize_required_field(&provider_config.username, "IP threat provider username")?;
+        let api_key = normalize_required_field(&provider_config.api_key, "IP threat provider API key")?;
 
-        let mut endpoint = self
-            .base_url
+        let mut endpoint = base_url
             .join(&format!("{username}/"))
             .map_err(|err| AppError::Internal(format!("invalid IP threat endpoint: {err}")))?;
         {
@@ -121,10 +131,43 @@ impl IpThreatClient {
         Ok(build_lookup_response(
             ip.to_string(),
             test_mode,
-            self.base_url.as_str().trim_end_matches('/').to_string(),
+            base_url.as_str().trim_end_matches('/').to_string(),
             raw,
         ))
     }
+}
+
+pub fn build_ip_threat_provider_config(
+    existing: Option<&IpThreatProviderConfigRecord>,
+    payload: IpThreatConfigUpdateRequest,
+    updated_by_user_id: &str,
+) -> Result<IpThreatProviderConfigRecord, AppError> {
+    let base_url_input = payload
+        .base_url
+        .unwrap_or_else(|| existing.map(|record| record.base_url.clone()).unwrap_or_else(|| DEFAULT_SCAMALYTICS_BASE_URL.to_string()));
+    let username_input = payload
+        .username
+        .unwrap_or_else(|| existing.map(|record| record.username.clone()).unwrap_or_default());
+    let api_key_input = payload
+        .api_key
+        .unwrap_or_else(|| existing.map(|record| record.api_key.clone()).unwrap_or_default());
+
+    let base_url = normalize_base_url(&base_url_input)?
+        .as_str()
+        .trim_end_matches('/')
+        .to_string();
+    let username = normalize_required_field(&username_input, "IP threat provider username")?.to_string();
+    let api_key = normalize_required_field(&api_key_input, "IP threat provider API key")?.to_string();
+
+    Ok(IpThreatProviderConfigRecord {
+        setting_id: SCAMALYTICS_SETTING_ID.to_string(),
+        provider: SCAMALYTICS_PROVIDER.to_string(),
+        base_url,
+        username,
+        api_key,
+        updated_at: Utc::now(),
+        updated_by_user_id: updated_by_user_id.to_string(),
+    })
 }
 
 fn build_lookup_response(
@@ -168,7 +211,7 @@ fn build_lookup_response(
     };
 
     IpThreatLookupResponse {
-        provider: "scamalytics".to_string(),
+        provider: SCAMALYTICS_PROVIDER.to_string(),
         ip,
         test_mode,
         provider_base_url,
@@ -178,6 +221,27 @@ fn build_lookup_response(
         credits: raw.get("credits").cloned(),
         raw,
     }
+}
+
+fn normalize_base_url(value: &str) -> Result<Url, AppError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(
+            "IP threat provider base URL is required".to_string(),
+        ));
+    }
+
+    Url::parse(trimmed)
+        .map_err(|err| AppError::BadRequest(format!("invalid IP threat base URL: {err}")))
+}
+
+fn normalize_required_field<'a>(value: &'a str, field_label: &str) -> Result<&'a str, AppError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(format!("{field_label} is required")));
+    }
+
+    Ok(trimmed)
 }
 
 fn extract_summary_source<'a>(raw: &'a Value) -> Option<&'a Value> {
@@ -214,15 +278,6 @@ fn get_bool(value: &Value, key: &str) -> Option<bool> {
         },
         _ => None,
     })
-}
-
-fn normalize_secret(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {

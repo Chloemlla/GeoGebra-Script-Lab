@@ -36,6 +36,19 @@ const formatFlag = (value) => {
   return '--';
 };
 
+const formatDateTime = (value) => {
+  if (!value) {
+    return '--';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '--';
+  }
+
+  return date.toLocaleString('zh-CN');
+};
+
 const resolveThreatTone = (summary) => {
   const risk = `${summary?.risk || ''}`.trim().toLowerCase();
   const score = Number(summary?.score);
@@ -61,6 +74,11 @@ const BackendPanel = ({
   onPromptChange,
   selectedFile,
   onFileChange,
+  ipThreatConfigDraft,
+  onIpThreatConfigFieldChange,
+  onSaveIpThreatConfig,
+  ipThreatConfigState,
+  isSavingIpThreatConfig,
   ipThreatDraft,
   onIpThreatDraftChange,
   onLookupIpThreat,
@@ -244,6 +262,81 @@ const BackendPanel = ({
       <article className="backend-card backend-card-full">
         <div className="backend-card-head">
           <div className="backend-card-head-copy">
+            <span className="backend-card-label">Provider Config</span>
+            <strong className="backend-card-title">Scamalytics 后台配置</strong>
+          </div>
+          <span className={`backend-badge backend-badge-${ipThreatConfigState?.configured ? 'success' : 'neutral'}`}>
+            {ipThreatConfigState?.configured ? 'configured' : 'pending'}
+          </span>
+        </div>
+
+        <div className="backend-threat-form backend-threat-form-config">
+          <label className="backend-field">
+            <span>Base URL</span>
+            <input
+              type="text"
+              className="backend-input"
+              value={ipThreatConfigDraft?.baseUrl || ''}
+              onChange={(event) => onIpThreatConfigFieldChange('baseUrl', event.target.value)}
+              placeholder="https://api13.scamalytics.com/v3"
+            />
+          </label>
+
+          <label className="backend-field">
+            <span>Username</span>
+            <input
+              type="text"
+              className="backend-input"
+              value={ipThreatConfigDraft?.username || ''}
+              onChange={(event) => onIpThreatConfigFieldChange('username', event.target.value)}
+              placeholder="happyclovo"
+            />
+          </label>
+
+          <label className="backend-field">
+            <span>API Key</span>
+            <input
+              type="password"
+              className="backend-input"
+              value={ipThreatConfigDraft?.apiKey || ''}
+              onChange={(event) => onIpThreatConfigFieldChange('apiKey', event.target.value)}
+              placeholder={ipThreatConfigState?.apiKeySet ? '留空则沿用当前已保存密钥' : '输入新的 API Key'}
+            />
+          </label>
+
+          <button
+            type="button"
+            className="backend-btn backend-btn-primary"
+            onClick={onSaveIpThreatConfig}
+            disabled={!isAuthenticated || isSavingIpThreatConfig}
+          >
+            {isSavingIpThreatConfig ? '保存中...' : '保存到数据库'}
+          </button>
+        </div>
+
+        <div className="backend-metadata backend-metadata-config">
+          <div className="backend-metric">
+            <span>Config Status</span>
+            <strong>{ipThreatConfigState?.configured ? '已启用' : '未完成'}</strong>
+          </div>
+          <div className="backend-metric">
+            <span>API Key</span>
+            <strong>{ipThreatConfigState?.apiKeySet ? '已保存' : '未保存'}</strong>
+          </div>
+          <div className="backend-metric">
+            <span>Updated At</span>
+            <strong>{formatDateTime(ipThreatConfigState?.updatedAt)}</strong>
+          </div>
+          <div className="backend-metric">
+            <span>Updated By</span>
+            <strong>{formatValue(ipThreatConfigState?.updatedByUserId)}</strong>
+          </div>
+        </div>
+      </article>
+
+      <article className="backend-card backend-card-full">
+        <div className="backend-card-head">
+          <div className="backend-card-head-copy">
             <span className="backend-card-label">IP Threat Intelligence</span>
             <strong className="backend-card-title">Scamalytics IP 风险查询</strong>
           </div>
@@ -284,7 +377,7 @@ const BackendPanel = ({
         </div>
 
         <p className="backend-help">
-          第三方请求由后端代理发起，基础地址来自环境变量：
+          第三方请求由后端代理发起，基础地址和密钥来自数据库中的后台配置：
           <code>{backendStatus?.ipThreatBaseUrl || '--'}</code>
         </p>
 

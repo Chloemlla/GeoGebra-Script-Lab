@@ -13,8 +13,8 @@ use crate::admin::build_admin_dashboard;
 use crate::auth::{
     build_auth_session_response, build_current_session_response, build_session,
     ensure_admin_compatibility, hash_password, normalize_display_name, normalize_email,
-    normalize_username, require_auth, validate_email, validate_password, validate_username,
-    verify_password,
+    normalize_username, require_admin, require_auth, validate_email, validate_password,
+    validate_username, verify_password,
 };
 use crate::error::AppError;
 use crate::frontend::serve_frontend_asset;
@@ -28,18 +28,20 @@ use crate::state::AppState;
 use crate::store::{
     cache_asset_payload, count_users, find_any_job_record, find_asset_payload, find_asset_record,
     find_export_job_record, find_job_record, find_project_record, find_project_versions_by_project,
-    find_review_comment_record, find_share_by_slug, find_team_record, find_user_by_email,
-    find_user_by_id, find_user_by_username, list_projects_by_team, list_projects_by_user,
-    list_projects_by_workspace, list_review_comments_by_project, list_team_memberships_by_team,
-    list_teams_by_user, revoke_session_by_token, upsert_asset_record, upsert_export_job_record,
-    upsert_job_record, upsert_project_record, upsert_project_version_record,
-    upsert_review_comment_record, upsert_session_record, upsert_share_record,
+    find_ip_threat_provider_config, find_review_comment_record, find_share_by_slug,
+    find_team_record, find_user_by_email, find_user_by_id, find_user_by_username,
+    list_projects_by_team, list_projects_by_user, list_projects_by_workspace,
+    list_review_comments_by_project, list_team_memberships_by_team, list_teams_by_user,
+    revoke_session_by_token, upsert_asset_record, upsert_export_job_record,
+    upsert_ip_threat_provider_config, upsert_job_record, upsert_project_record,
+    upsert_project_version_record, upsert_review_comment_record, upsert_session_record, upsert_share_record,
     upsert_team_membership_record, upsert_team_record, upsert_user_record,
 };
+use crate::threat_intel::build_ip_threat_provider_config;
 use crate::types::{
     AnnotationJobRequest, Diagnostics, DrawingJobCreateRequest, DrawingJobRecord,
     DrawingJobResultResponse, ExportJobCreateRequest, ExportJobRecord, ExportJobStatus, JobStatus,
-    LoginRequest, ModelConfigUpdateRequest, ObjectExplanationRequest, ProjectCreateRequest,
+    IpThreatConfigUpdateRequest, LoginRequest, ModelConfigUpdateRequest, ObjectExplanationRequest, ProjectCreateRequest,
     ProjectRecord, ProjectUpdateRequest, ProjectVersionCreateRequest, ProjectVersionRecord,
     ProjectVersionSummary, RegisterRequest, RenderHints, ReviewCommentCreateRequest,
     ReviewCommentRecord, ReviewCommentUpdateRequest, ScriptInsightsRequest, ShareCreateRequest,
@@ -119,17 +121,7 @@ pub async fn route_request(
             "ok",
             "text/plain; charset=utf-8",
         )),
-        (Method::GET, "/api/v1/admin/dashboard") => Ok(json_response(
-            StatusCode::OK,
-            envelope(
-                true,
-                "ADMIN_DASHBOARD",
-                "admin dashboard snapshot",
-                request_id(),
-                Some(json!(build_admin_dashboard(&state).await)),
-                None,
-            ),
-        )),
+        (Method::GET, "/api/v1/admin/dashboard") => get_admin_dashboard(request, state).await,
         (Method::GET, "/metrics") | (Method::GET, "/api/v1/metrics") => Ok(json_response(
             StatusCode::OK,
             envelope(
@@ -152,22 +144,13 @@ pub async fn route_request(
                 None,
             ),
         )),
-        (Method::GET, "/api/v1/ip-threat/config") => Ok(json_response(
-            StatusCode::OK,
-            envelope(
-                true,
-                "IP_THREAT_CONFIG",
-                "current IP threat provider config",
-                request_id(),
-                Some(json!(state.ip_threat_client.view())),
-                None,
-            ),
-        )),
+        (Method::GET, "/api/v1/ip-threat/config") => get_ip_threat_config(request, state).await,
         (Method::POST, "/api/v1/auth/register") => register_user(request, state).await,
         (Method::POST, "/api/v1/auth/login") => login_user(request, state).await,
         (Method::GET, "/api/v1/auth/me") => get_current_session(request, state).await,
         (Method::POST, "/api/v1/auth/logout") => logout_user(request, state).await,
         (Method::PUT, "/api/v1/model/config") => update_model_config(request, state).await,
+        (Method::PUT, "/api/v1/ip-threat/config") => update_ip_threat_config(request, state).await,
         (Method::GET, "/api/v1/ip-threat/lookup") => lookup_ip_threat(request, state).await,
         (Method::GET, "/api/v1/projects") => list_projects(request, state).await,
         (Method::POST, "/api/v1/projects") => create_project(request, state).await,
@@ -356,6 +339,7 @@ async fn update_model_config(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
+    require_admin(request.headers(), &state).await?;
     let body = read_json(request).await?;
     let payload: ModelConfigUpdateRequest = serde_json::from_value(body)
         .map_err(|err| AppError::BadRequest(format!("invalid model config body: {err}")))?;
@@ -387,11 +371,77 @@ async fn update_model_config(
     ))
 }
 
+async fn get_admin_dashboard(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    require_admin(request.headers(), &state).await?;
+
+    Ok(json_response(
+        StatusCode::OK,
+        envelope(
+            true,
+            "ADMIN_DASHBOARD",
+            "admin dashboard snapshot",
+            request_id(),
+            Some(json!(build_admin_dashboard(&state).await)),
+            None,
+        ),
+    ))
+}
+
+async fn get_ip_threat_config(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    require_admin(request.headers(), &state).await?;
+    let config = find_ip_threat_provider_config(&state).await?;
+    let view = state.ip_threat_client.view(config.as_ref());
+
+    Ok(json_response(
+        StatusCode::OK,
+        envelope(
+            true,
+            "IP_THREAT_CONFIG",
+            "current IP threat provider config",
+            request_id(),
+            Some(json!(view)),
+            None,
+        ),
+    ))
+}
+
+async fn update_ip_threat_config(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_admin(request.headers(), &state).await?;
+    let body = read_json(request).await?;
+    let payload: IpThreatConfigUpdateRequest = serde_json::from_value(body)
+        .map_err(|err| AppError::BadRequest(format!("invalid IP threat config body: {err}")))?;
+    let existing = find_ip_threat_provider_config(&state).await?;
+    let record = build_ip_threat_provider_config(existing.as_ref(), payload, &auth.user.user_id)?;
+    upsert_ip_threat_provider_config(&state, &record).await?;
+    let view = state.ip_threat_client.view(Some(&record));
+
+    Ok(json_response(
+        StatusCode::OK,
+        envelope(
+            true,
+            "IP_THREAT_CONFIG_UPDATED",
+            "IP threat provider config updated",
+            request_id(),
+            Some(json!(view)),
+            None,
+        ),
+    ))
+}
+
 async fn lookup_ip_threat(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
-    require_auth(request.headers(), &state).await?;
+    require_admin(request.headers(), &state).await?;
     let query = request.uri().query().unwrap_or_default();
     let params = url::form_urlencoded::parse(query.as_bytes())
         .into_owned()
@@ -407,7 +457,13 @@ async fn lookup_ip_threat(
         .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false);
 
-    let result = state.ip_threat_client.lookup_ip(ip, test_mode).await?;
+    let provider_config = find_ip_threat_provider_config(&state)
+        .await?
+        .ok_or_else(|| AppError::Unavailable("IP threat provider is not configured".to_string()))?;
+    let result = state
+        .ip_threat_client
+        .lookup_ip(ip, test_mode, &provider_config)
+        .await?;
 
     Ok(json_response(
         StatusCode::OK,

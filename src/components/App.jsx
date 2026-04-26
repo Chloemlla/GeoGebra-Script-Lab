@@ -55,6 +55,7 @@ import {
   registerUser,
   setAuthToken,
   setUnauthorizedHandler,
+  updateIpThreatConfig,
   updateReviewComment,
   updateProject,
   uploadAsset,
@@ -776,6 +777,18 @@ const App = () => {
   });
   const [generationPrompt, setGenerationPrompt] = useState(DEFAULT_GENERATION_PROMPT);
   const [referenceFile, setReferenceFile] = useState(null);
+  const [ipThreatConfigDraft, setIpThreatConfigDraft] = useState({
+    baseUrl: '',
+    username: '',
+    apiKey: '',
+  });
+  const [ipThreatConfigState, setIpThreatConfigState] = useState({
+    configured: false,
+    apiKeySet: false,
+    updatedAt: null,
+    updatedByUserId: '',
+  });
+  const [isSavingIpThreatConfig, setIsSavingIpThreatConfig] = useState(false);
   const [ipThreatDraft, setIpThreatDraft] = useState({
     ip: '',
     testMode: true,
@@ -818,6 +831,11 @@ const App = () => {
   );
   const currentUser = authSession?.user ?? null;
   const isAuthenticated = authState.state === 'authenticated' && Boolean(authSession?.token && currentUser);
+  const isAdminUser = Boolean(currentUser?.isAdmin);
+  const visibleAppPages = useMemo(
+    () => APP_PAGES.filter((page) => page.id !== APP_PAGE_IDS.backend || isAdminUser),
+    [isAdminUser]
+  );
 
   const isCompactLayout = viewportWidth <= MOBILE_BREAKPOINT;
   const isPhoneLayout = viewportWidth <= PHONE_BREAKPOINT;
@@ -1730,6 +1748,16 @@ const App = () => {
   const refreshAdminDashboard = useCallback(async (options = {}) => {
     const { silent = false } = options;
 
+    if (!isAuthenticated || !isAdminUser) {
+      setAdminDashboard(null);
+      setAdminState({
+        state: 'idle',
+        message: '仅管理员可查看后台快照',
+        isRefreshing: false,
+      });
+      return;
+    }
+
     setAdminState((prev) => ({
       state: prev.state === 'ready' && silent ? prev.state : 'loading',
       message:
@@ -1762,7 +1790,7 @@ const App = () => {
         isRefreshing: false,
       });
     }
-  }, []);
+  }, [isAdminUser, isAuthenticated]);
 
   const executePreparedCommands = useCallback(
     async (commands, options = {}) => {
@@ -1915,6 +1943,73 @@ const App = () => {
     setReferenceFile(file ?? null);
   }, []);
 
+  const handleIpThreatConfigFieldChange = useCallback((field, value) => {
+    setIpThreatConfigDraft((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  }, []);
+
+  const handleSaveIpThreatConfig = useCallback(async () => {
+    if (!ensureAuthenticatedForAction('请先登录管理员账号后再配置 IP 威胁接口')) {
+      return;
+    }
+
+    if (!isAdminUser) {
+      pushUiNotice('只有管理员可以修改 IP 威胁接口配置', 'danger');
+      return;
+    }
+
+    setIsSavingIpThreatConfig(true);
+
+    try {
+      const payload = {
+        baseUrl: ipThreatConfigDraft.baseUrl.trim(),
+        username: ipThreatConfigDraft.username.trim(),
+      };
+
+      if (ipThreatConfigDraft.apiKey.trim()) {
+        payload.apiKey = ipThreatConfigDraft.apiKey.trim();
+      }
+
+      const nextConfig = await updateIpThreatConfig(payload);
+      setBackendStatus((prev) => ({
+        ...prev,
+        ipThreatConfigured: Boolean(nextConfig?.configured),
+        ipThreatBaseUrl: nextConfig?.baseUrl || '',
+      }));
+      setIpThreatConfigDraft((prev) => ({
+        ...prev,
+        baseUrl: nextConfig?.baseUrl || prev.baseUrl,
+        username: nextConfig?.username || prev.username,
+        apiKey: '',
+      }));
+      setIpThreatConfigState({
+        configured: Boolean(nextConfig?.configured),
+        apiKeySet: Boolean(nextConfig?.apiKeySet),
+        updatedAt: nextConfig?.updatedAt || null,
+        updatedByUserId: nextConfig?.updatedByUserId || '',
+      });
+      appendLog('IP 威胁接口配置已保存到数据库', 'success');
+      pushUiNotice('IP 威胁接口配置已保存', 'success');
+    } catch (error) {
+      appendLog(`保存 IP 威胁接口配置失败：${error.message}`, 'error');
+      if (error?.status !== 401) {
+        pushUiNotice(error.message, 'danger');
+      }
+    } finally {
+      setIsSavingIpThreatConfig(false);
+    }
+  }, [
+    appendLog,
+    ensureAuthenticatedForAction,
+    ipThreatConfigDraft.apiKey,
+    ipThreatConfigDraft.baseUrl,
+    ipThreatConfigDraft.username,
+    isAdminUser,
+    pushUiNotice,
+  ]);
+
   const handleIpThreatDraftChange = useCallback((field, value) => {
     setIpThreatDraft((prev) => ({
       ...prev,
@@ -1924,6 +2019,11 @@ const App = () => {
 
   const handleLookupIpThreat = useCallback(async () => {
     if (!ensureAuthenticatedForAction('请先登录后再查询 IP 威胁情报')) {
+      return;
+    }
+
+    if (!isAdminUser) {
+      pushUiNotice('只有管理员可以查询 IP 威胁情报', 'danger');
       return;
     }
 
@@ -1958,6 +2058,7 @@ const App = () => {
     ensureAuthenticatedForAction,
     ipThreatDraft.ip,
     ipThreatDraft.testMode,
+    isAdminUser,
     pushUiNotice,
   ]);
 
@@ -3474,11 +3575,13 @@ const App = () => {
 
     const syncBackendStatus = async () => {
       try {
-        const [health, modelConfig, ipThreatConfig] = await Promise.all([
+        const [health, modelConfig] = await Promise.all([
           fetchHealth(),
           fetchModelConfig(),
-          fetchIpThreatConfig(),
         ]);
+        const ipThreatConfig = isAuthenticated && isAdminUser
+          ? await fetchIpThreatConfig()
+          : null;
         if (isCancelled) {
           return;
         }
@@ -3490,6 +3593,17 @@ const App = () => {
           providerBaseUrl: modelConfig?.baseUrl || '',
           ipThreatConfigured: Boolean(ipThreatConfig?.configured),
           ipThreatBaseUrl: ipThreatConfig?.baseUrl || '',
+        });
+        setIpThreatConfigDraft({
+          baseUrl: ipThreatConfig?.baseUrl || '',
+          username: ipThreatConfig?.username || '',
+          apiKey: '',
+        });
+        setIpThreatConfigState({
+          configured: Boolean(ipThreatConfig?.configured),
+          apiKeySet: Boolean(ipThreatConfig?.apiKeySet),
+          updatedAt: ipThreatConfig?.updatedAt || null,
+          updatedByUserId: ipThreatConfig?.updatedByUserId || '',
         });
       } catch (error) {
         if (isCancelled) {
@@ -3504,6 +3618,17 @@ const App = () => {
           ipThreatConfigured: false,
           ipThreatBaseUrl: '',
         });
+        setIpThreatConfigDraft({
+          baseUrl: '',
+          username: '',
+          apiKey: '',
+        });
+        setIpThreatConfigState({
+          configured: false,
+          apiKeySet: false,
+          updatedAt: null,
+          updatedByUserId: '',
+        });
       }
     };
 
@@ -3512,7 +3637,7 @@ const App = () => {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [isAdminUser, isAuthenticated]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -3570,11 +3695,15 @@ const App = () => {
   }, [clearAuthentication, storedAuthSession]);
 
   useEffect(() => {
+    if (!isAuthenticated || !isAdminUser) {
+      return;
+    }
+
     void refreshAdminDashboard();
-  }, [refreshAdminDashboard]);
+  }, [isAdminUser, isAuthenticated, refreshAdminDashboard]);
 
   useEffect(() => {
-    if (!isAdminAutoRefresh) {
+    if (!isAuthenticated || !isAdminUser || !isAdminAutoRefresh) {
       return undefined;
     }
 
@@ -3583,7 +3712,7 @@ const App = () => {
     }, 8000);
 
     return () => window.clearInterval(timer);
-  }, [isAdminAutoRefresh, refreshAdminDashboard]);
+  }, [isAdminAutoRefresh, isAdminUser, isAuthenticated, refreshAdminDashboard]);
 
   useEffect(() => {
     if (!initialShareSlugRef.current || hasLoadedInitialShareRef.current) {
@@ -3689,6 +3818,23 @@ const App = () => {
       isCloudSyncEnabled ? 'true' : 'false'
     );
   }, [isCloudSyncEnabled]);
+
+  useEffect(() => {
+    if (currentPage.id !== APP_PAGE_IDS.backend) {
+      return;
+    }
+
+    if (!isAuthenticated) {
+      pushUiNotice('登录管理员账号后才能访问 /backend', 'warning');
+      navigateToPage(APP_PAGE_IDS.auth);
+      return;
+    }
+
+    if (!isAdminUser) {
+      pushUiNotice('只有管理员可以访问 /backend', 'danger');
+      navigateToPage(APP_PAGE_IDS.overview);
+    }
+  }, [currentPage.id, isAdminUser, isAuthenticated, navigateToPage, pushUiNotice]);
 
   useEffect(() => {
     const unsubscribe = GeoGebraEngine.onManualChange(({ labels }) => {
@@ -3799,7 +3945,7 @@ const App = () => {
           {isGlobalNavMenuOpen && (
             <div id="global-nav-dropdown" className="global-nav-dropdown">
               <div className="global-route-nav" role="tablist" aria-label="页面导航">
-                {APP_PAGES.map((page) => (
+                {visibleAppPages.map((page) => (
                   <button
                     key={page.id}
                     type="button"
@@ -5077,6 +5223,11 @@ const App = () => {
             setGenerationPrompt={setGenerationPrompt}
             referenceFile={referenceFile}
             handleReferenceFileChange={handleReferenceFileChange}
+            ipThreatConfigDraft={ipThreatConfigDraft}
+            handleIpThreatConfigFieldChange={handleIpThreatConfigFieldChange}
+            handleSaveIpThreatConfig={handleSaveIpThreatConfig}
+            ipThreatConfigState={ipThreatConfigState}
+            isSavingIpThreatConfig={isSavingIpThreatConfig}
             ipThreatDraft={ipThreatDraft}
             handleIpThreatDraftChange={handleIpThreatDraftChange}
             handleLookupIpThreat={handleLookupIpThreat}

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::types::{
     AssetRecord, DrawingJobRecord, ExportJobRecord, ProjectRecord, ProjectVersionRecord,
-    ReviewCommentRecord, SessionRecord, ShareRecord, TeamMembershipRecord, TeamRecord,
-    UploadedAsset, UserRecord,
+    IpThreatProviderConfigRecord, ReviewCommentRecord, SessionRecord, ShareRecord,
+    TeamMembershipRecord, TeamRecord, UploadedAsset, UserRecord,
 };
 
 #[derive(Default)]
@@ -24,4 +24,5 @@ pub struct MemoryStore {
     pub usernames: HashMap<String, String>,
     pub sessions: HashMap<String, SessionRecord>,
     pub session_tokens: HashMap<String, String>,
+    pub ip_threat_provider_configs: HashMap<String, IpThreatProviderConfigRecord>,
 }

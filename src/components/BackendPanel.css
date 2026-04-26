@@ -240,6 +240,10 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.backend-metadata-config {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .backend-metric {
   display: flex;
   flex-direction: column;
@@ -328,6 +332,10 @@
   flex: 1 1 320px;
   flex-direction: column;
   gap: 8px;
+}
+
+.backend-threat-form-config .backend-btn {
+  align-self: flex-end;
 }
 
 .backend-field span {

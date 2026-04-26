@@ -205,3 +205,14 @@ pub async fn require_auth(headers: &HeaderMap, state: &AppState) -> Result<AuthC
 
     Ok(AuthContext { user, session })
 }
+
+pub async fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<AuthContext, AppError> {
+    let auth = require_auth(headers, state).await?;
+    if !auth.user.is_admin {
+        return Err(AppError::Unauthorized(
+            "administrator access is required".to_string(),
+        ));
+    }
+
+    Ok(auth)
+}

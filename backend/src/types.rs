@@ -479,8 +479,11 @@ pub struct ModelConfigView {
 pub struct IpThreatConfigView {
     pub configured: bool,
     pub base_url: String,
+    pub username: String,
     pub username_set: bool,
     pub api_key_set: bool,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_by_user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -514,6 +517,26 @@ pub struct IpThreatLookupResponse {
     pub external_datasources: Option<Value>,
     pub credits: Option<Value>,
     pub raw: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IpThreatProviderConfigRecord {
+    pub setting_id: String,
+    pub provider: String,
+    pub base_url: String,
+    pub username: String,
+    pub api_key: String,
+    pub updated_at: DateTime<Utc>,
+    pub updated_by_user_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IpThreatConfigUpdateRequest {
+    pub base_url: Option<String>,
+    pub username: Option<String>,
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

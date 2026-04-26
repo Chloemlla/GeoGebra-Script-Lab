@@ -279,7 +279,7 @@ pub async fn build_state(config: AppConfig) -> Result<AppState, AppError> {
         config.model_name.clone(),
         config.api_key.clone(),
     )?);
-    let ip_threat_client = Arc::new(IpThreatClient::new(&config)?);
+    let ip_threat_client = Arc::new(IpThreatClient::new()?);
     let frontend_assets = Arc::new(FrontendAssets::load(config.frontend_dist_dir.as_deref()));
     let mongo_store = match &config.mongodb_uri {
         Some(uri) => Some(Arc::new(

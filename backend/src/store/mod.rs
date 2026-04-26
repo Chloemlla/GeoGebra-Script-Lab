@@ -6,13 +6,51 @@ pub use mongo::MongoStore;
 
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::threat_intel::SCAMALYTICS_SETTING_ID;
 use crate::types::{
     AssetRecord, DrawingJobRecord, ExportJobRecord, ProjectRecord, ProjectVersionRecord,
-    ReviewCommentRecord, SessionRecord, ShareRecord, TeamMembershipRecord, TeamRecord,
-    UploadedAsset, UserRecord,
+    IpThreatProviderConfigRecord, ReviewCommentRecord, SessionRecord, ShareRecord,
+    TeamMembershipRecord, TeamRecord, UploadedAsset, UserRecord,
 };
 
 const MAX_IN_MEMORY_ASSET_PAYLOAD_BYTES: usize = 512 * 1024;
+
+pub async fn find_ip_threat_provider_config(
+    state: &AppState,
+) -> Result<Option<IpThreatProviderConfigRecord>, AppError> {
+    if let Some(record) = state
+        .store
+        .read()
+        .await
+        .ip_threat_provider_configs
+        .get(SCAMALYTICS_SETTING_ID)
+        .cloned()
+    {
+        return Ok(Some(record));
+    }
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let record = mongo_store.find_ip_threat_provider_config().await?;
+        if let Some(record) = record.clone() {
+            cache_ip_threat_provider_config(state, &record).await;
+        }
+        return Ok(record);
+    }
+
+    Ok(None)
+}
+
+pub async fn upsert_ip_threat_provider_config(
+    state: &AppState,
+    record: &IpThreatProviderConfigRecord,
+) -> Result<(), AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.upsert_ip_threat_provider_config(record).await?;
+    }
+
+    cache_ip_threat_provider_config(state, record).await;
+    Ok(())
+}
 
 pub async fn find_asset_record(
     asset_id: &str,
@@ -907,4 +945,13 @@ async fn cache_session_record(state: &AppState, record: &SessionRecord) {
     store
         .sessions
         .insert(record.session_id.clone(), record.clone());
+}
+
+async fn cache_ip_threat_provider_config(state: &AppState, record: &IpThreatProviderConfigRecord) {
+    state
+        .store
+        .write()
+        .await
+        .ip_threat_provider_configs
+        .insert(record.setting_id.clone(), record.clone());
 }
