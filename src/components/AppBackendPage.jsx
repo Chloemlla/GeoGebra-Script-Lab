@@ -8,6 +8,11 @@ const AppBackendPage = ({
   setGenerationPrompt,
   referenceFile,
   handleReferenceFileChange,
+  ipThreatDraft,
+  handleIpThreatDraftChange,
+  handleLookupIpThreat,
+  ipThreatResult,
+  isCheckingIpThreat,
   handleGenerateFromBackend,
   handlePublishShare,
   focusAuthentication,
@@ -40,6 +45,11 @@ const AppBackendPage = ({
         onPromptChange={setGenerationPrompt}
         selectedFile={referenceFile}
         onFileChange={handleReferenceFileChange}
+        ipThreatDraft={ipThreatDraft}
+        onIpThreatDraftChange={handleIpThreatDraftChange}
+        onLookupIpThreat={handleLookupIpThreat}
+        ipThreatResult={ipThreatResult}
+        isCheckingIpThreat={isCheckingIpThreat}
         onGenerate={handleGenerateFromBackend}
         onPublish={handlePublishShare}
         onRequireAuth={() => focusAuthentication('登录后即可调用后端 Bridge 能力')}

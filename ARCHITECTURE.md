@@ -436,6 +436,10 @@ npm run build
 
 ```
 VITE_GEOGEBRA_URL=https://www.geogebra.org/apps/deployggb.js
+VITE_API_BASE_URL=http://127.0.0.1:3001
+IP_THREAT_BASE_URL=https://api13.scamalytics.com/v3
+IP_THREAT_USERNAME=happyclovo
+IP_THREAT_API_KEY=your_scamalytics_api_key
 ```
 
 ## 9. 故障排查

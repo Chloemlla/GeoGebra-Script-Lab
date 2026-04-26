@@ -42,6 +42,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         println!("MongoDB persistence is disabled; runtime will fallback to in-memory data only");
     }
+    let ip_threat_config = state.ip_threat_client.view();
+    if ip_threat_config.configured {
+        println!(
+            "IP threat lookup is enabled via {}",
+            ip_threat_config.base_url
+        );
+    } else {
+        println!(
+            "IP threat lookup is disabled; set IP_THREAT_USERNAME and IP_THREAT_API_KEY to enable it"
+        );
+    }
 
     loop {
         let (stream, _) = listener.accept().await?;

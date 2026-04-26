@@ -127,6 +127,22 @@ export async function fetchModelConfig() {
   return request('/api/v1/model/config');
 }
 
+export async function fetchIpThreatConfig() {
+  return request('/api/v1/ip-threat/config');
+}
+
+export async function lookupIpThreat({ ip, testMode = false }) {
+  const query = new URLSearchParams();
+  if (typeof ip === 'string' && ip.trim()) {
+    query.set('ip', ip.trim());
+  }
+  if (testMode) {
+    query.set('test', '1');
+  }
+
+  return request(`/api/v1/ip-threat/lookup?${query.toString()}`);
+}
+
 export async function fetchAdminDashboard() {
   return request('/api/v1/admin/dashboard');
 }

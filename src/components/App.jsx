@@ -35,6 +35,7 @@ import {
   fetchAdminDashboard,
   fetchHealth,
   fetchCurrentUser,
+  fetchIpThreatConfig,
   downloadExportJob,
   fetchModelConfig,
   fetchProject,
@@ -46,6 +47,7 @@ import {
   listTeamMembers,
   listTeams,
   loginUser,
+  lookupIpThreat,
   logoutUser,
   pollDrawingJob,
   pollExportJob,
@@ -659,6 +661,8 @@ const App = () => {
     message: '正在检测后端连接',
     modelName: '',
     providerBaseUrl: '',
+    ipThreatConfigured: false,
+    ipThreatBaseUrl: '',
   });
   const [authMode, setAuthMode] = useState('login');
   const [authState, setAuthState] = useState(
@@ -772,11 +776,18 @@ const App = () => {
   });
   const [generationPrompt, setGenerationPrompt] = useState(DEFAULT_GENERATION_PROMPT);
   const [referenceFile, setReferenceFile] = useState(null);
+  const [ipThreatDraft, setIpThreatDraft] = useState({
+    ip: '',
+    testMode: true,
+  });
+  const [ipThreatResult, setIpThreatResult] = useState(null);
+  const [isCheckingIpThreat, setIsCheckingIpThreat] = useState(false);
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [isPublishingShare, setIsPublishingShare] = useState(false);
   const [latestJobResult, setLatestJobResult] = useState(null);
   const [latestShare, setLatestShare] = useState(null);
   const [activeShareSlug, setActiveShareSlug] = useState(null);
+  const [isGlobalNavMenuOpen, setIsGlobalNavMenuOpen] = useState(false);
   const dispatcherRef = useRef(null);
   const startTimeRef = useRef(null);
   const dirtyWarningLoggedRef = useRef(false);
@@ -1903,6 +1914,52 @@ const App = () => {
   const handleReferenceFileChange = useCallback((file) => {
     setReferenceFile(file ?? null);
   }, []);
+
+  const handleIpThreatDraftChange = useCallback((field, value) => {
+    setIpThreatDraft((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  }, []);
+
+  const handleLookupIpThreat = useCallback(async () => {
+    if (!ensureAuthenticatedForAction('请先登录后再查询 IP 威胁情报')) {
+      return;
+    }
+
+    const trimmedIp = ipThreatDraft.ip.trim();
+    if (!trimmedIp) {
+      pushUiNotice('请输入要查询的 IP 地址', 'warning');
+      return;
+    }
+
+    setIsCheckingIpThreat(true);
+
+    try {
+      const result = await lookupIpThreat({
+        ip: trimmedIp,
+        testMode: ipThreatDraft.testMode,
+      });
+      setIpThreatResult(result);
+      appendLog(
+        `IP 威胁情报查询完成：${trimmedIp} (${result.summary?.risk || result.summary?.status || 'unknown'})`,
+        'success'
+      );
+    } catch (error) {
+      appendLog(`IP 威胁情报查询失败：${error.message}`, 'error');
+      if (error?.status !== 401) {
+        pushUiNotice(error.message, 'danger');
+      }
+    } finally {
+      setIsCheckingIpThreat(false);
+    }
+  }, [
+    appendLog,
+    ensureAuthenticatedForAction,
+    ipThreatDraft.ip,
+    ipThreatDraft.testMode,
+    pushUiNotice,
+  ]);
 
   const handleGenerateFromBackend = useCallback(async () => {
     if (!ensureAuthenticatedForAction('请先登录后再调用后端生成能力')) {
@@ -3417,7 +3474,11 @@ const App = () => {
 
     const syncBackendStatus = async () => {
       try {
-        const [health, modelConfig] = await Promise.all([fetchHealth(), fetchModelConfig()]);
+        const [health, modelConfig, ipThreatConfig] = await Promise.all([
+          fetchHealth(),
+          fetchModelConfig(),
+          fetchIpThreatConfig(),
+        ]);
         if (isCancelled) {
           return;
         }
@@ -3427,6 +3488,8 @@ const App = () => {
           message: health?.status === 'ok' ? '后端服务可用' : '后端已响应',
           modelName: modelConfig?.modelName || '',
           providerBaseUrl: modelConfig?.baseUrl || '',
+          ipThreatConfigured: Boolean(ipThreatConfig?.configured),
+          ipThreatBaseUrl: ipThreatConfig?.baseUrl || '',
         });
       } catch (error) {
         if (isCancelled) {
@@ -3438,6 +3501,8 @@ const App = () => {
           message: error.message,
           modelName: '',
           providerBaseUrl: '',
+          ipThreatConfigured: false,
+          ipThreatBaseUrl: '',
         });
       }
     };
@@ -3537,6 +3602,10 @@ const App = () => {
       appendLog(`分享加载失败：${error.message}`, 'error');
     });
   }, [appendLog, loadSharedCanvas]);
+
+  useEffect(() => {
+    setIsGlobalNavMenuOpen(false);
+  }, [currentPage.id]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -3674,38 +3743,61 @@ const App = () => {
     return (    
     <div className="app-shell">
       <div className="app-container">
-        <div className="global-nav">
-          <div className="global-nav-brand">
-            <span className="global-nav-mark">
-              <AppIcon className="global-nav-mark-image" decorative />
-            </span>
-            <div className="global-nav-copy">
-              <strong>GeoGebra Script Lab</strong>
-              <span>React · Monaco Editor · GeoGebra Web API</span>
+        <div className={`global-nav ${isGlobalNavMenuOpen ? 'is-open' : ''}`}>
+          <div className="global-nav-main">
+            <div className="global-nav-brand">
+              <span className="global-nav-mark">
+                <AppIcon className="global-nav-mark-image" decorative />
+              </span>
+              <div className="global-nav-copy">
+                <strong>GeoGebra Script Lab</strong>
+                <span>React · Monaco Editor · GeoGebra Web API</span>
+              </div>
+            </div>
+
+            <div className="global-nav-summary">
+              <span className="global-nav-summary-kicker">当前页面</span>
+              <strong>{currentPage.label}</strong>
+              <span>{currentPage.description}</span>
+            </div>
+
+            <div className="global-nav-actions">
+              <a
+                ref={openSourceLinkRef}
+                className="open-source-pill"
+                href={OPEN_SOURCE_REPOSITORY_URL}
+                target="_blank"
+                rel="external noopener noreferrer"
+                referrerPolicy="no-referrer"
+                title={OPEN_SOURCE_REPOSITORY_URL}
+                aria-label={OPEN_SOURCE_LINK_ARIA_LABEL}
+                data-source-signature={OPEN_SOURCE_LINK_SIGNATURE}
+              >
+                <span className="open-source-pill-label" data-open-source-label>
+                  {OPEN_SOURCE_LINK_LABEL}
+                </span>
+                <strong className="open-source-pill-path" data-open-source-path>
+                  {OPEN_SOURCE_REPOSITORY_PATH}
+                </strong>
+              </a>
+
+              <button
+                type="button"
+                className={`global-nav-menu-button ${isGlobalNavMenuOpen ? 'active' : ''}`}
+                onClick={() => setIsGlobalNavMenuOpen((prev) => !prev)}
+                aria-expanded={isGlobalNavMenuOpen}
+                aria-controls="global-nav-dropdown"
+                aria-label={isGlobalNavMenuOpen ? '收起页面信息菜单' : '展开页面信息菜单'}
+              >
+                <span />
+                <span />
+                <span />
+              </button>
             </div>
           </div>
 
-          <div className="global-nav-actions">
-            <a
-              ref={openSourceLinkRef}
-              className="open-source-pill"
-              href={OPEN_SOURCE_REPOSITORY_URL}
-              target="_blank"
-              rel="external noopener noreferrer"
-              referrerPolicy="no-referrer"
-              title={OPEN_SOURCE_REPOSITORY_URL}
-              aria-label={OPEN_SOURCE_LINK_ARIA_LABEL}
-              data-source-signature={OPEN_SOURCE_LINK_SIGNATURE}
-            >
-              <span className="open-source-pill-label" data-open-source-label>
-                {OPEN_SOURCE_LINK_LABEL}
-              </span>
-              <strong className="open-source-pill-path" data-open-source-path>
-                {OPEN_SOURCE_REPOSITORY_PATH}
-              </strong>
-            </a>
-
-            <div className="global-nav-meta">
+          {isGlobalNavMenuOpen && (
+            <div id="global-nav-dropdown" className="global-nav-dropdown">
               <div className="global-route-nav" role="tablist" aria-label="页面导航">
                 {APP_PAGES.map((page) => (
                   <button
@@ -3729,14 +3821,16 @@ const App = () => {
                   <p>{currentPage.description}</p>
                 </div>
               </div>
-              <span className="nav-pill">{selectedCanvasMode.label}</span>
-              <span className={`nav-pill nav-pill-${authTone}`}>{authStatusText}</span>
-              <span className={`nav-pill nav-pill-${backendTone}`}>{backendStatusText}</span>
-              <span className={`nav-pill nav-pill-${cloudSyncTone}`}>{cloudSyncState.message}</span>
-              <span className={`nav-pill nav-pill-${syncTone}`}>{syncStatusText}</span>
-              <span className={`nav-pill nav-pill-${recentRunTone}`}>{recentRunStatus}</span>
+              <div className="global-nav-meta">
+                <span className="nav-pill">{selectedCanvasMode.label}</span>
+                <span className={`nav-pill nav-pill-${authTone}`}>{authStatusText}</span>
+                <span className={`nav-pill nav-pill-${backendTone}`}>{backendStatusText}</span>
+                <span className={`nav-pill nav-pill-${cloudSyncTone}`}>{cloudSyncState.message}</span>
+                <span className={`nav-pill nav-pill-${syncTone}`}>{syncStatusText}</span>
+                <span className={`nav-pill nav-pill-${recentRunTone}`}>{recentRunStatus}</span>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {uiNotices.length > 0 && (
@@ -4983,6 +5077,11 @@ const App = () => {
             setGenerationPrompt={setGenerationPrompt}
             referenceFile={referenceFile}
             handleReferenceFileChange={handleReferenceFileChange}
+            ipThreatDraft={ipThreatDraft}
+            handleIpThreatDraftChange={handleIpThreatDraftChange}
+            handleLookupIpThreat={handleLookupIpThreat}
+            ipThreatResult={ipThreatResult}
+            isCheckingIpThreat={isCheckingIpThreat}
             handleGenerateFromBackend={handleGenerateFromBackend}
             handlePublishShare={handlePublishShare}
             focusAuthentication={focusAuthentication}

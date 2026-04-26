@@ -13,6 +13,7 @@ use crate::metrics::MetricsRegistry;
 use crate::model::{ModelClient, ModelDrawingResponse};
 use crate::storage::{build_media_export, build_pdf_export, build_svg_export};
 use crate::store::{MemoryStore, MongoStore};
+use crate::threat_intel::IpThreatClient;
 use crate::types::{
     Diagnostics, DrawingJobCreateRequest, ExportJobCreateRequest, ExportJobStatus, JobStatus,
 };
@@ -23,6 +24,7 @@ pub struct AppState {
     pub config: AppConfig,
     pub store: Arc<RwLock<MemoryStore>>,
     pub model_client: Arc<ModelClient>,
+    pub ip_threat_client: Arc<IpThreatClient>,
     pub model_task_dispatcher: Arc<ModelTaskDispatcher>,
     pub export_task_dispatcher: Arc<ExportTaskDispatcher>,
     pub frontend_assets: Arc<FrontendAssets>,
@@ -277,6 +279,7 @@ pub async fn build_state(config: AppConfig) -> Result<AppState, AppError> {
         config.model_name.clone(),
         config.api_key.clone(),
     )?);
+    let ip_threat_client = Arc::new(IpThreatClient::new(&config)?);
     let frontend_assets = Arc::new(FrontendAssets::load(config.frontend_dist_dir.as_deref()));
     let mongo_store = match &config.mongodb_uri {
         Some(uri) => Some(Arc::new(
@@ -303,6 +306,7 @@ pub async fn build_state(config: AppConfig) -> Result<AppState, AppError> {
         config,
         store,
         model_client,
+        ip_threat_client,
         model_task_dispatcher,
         export_task_dispatcher,
         frontend_assets,

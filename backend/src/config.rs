@@ -9,6 +9,9 @@ pub struct AppConfig {
     pub model_base_url: String,
     pub model_name: String,
     pub api_key: String,
+    pub ip_threat_base_url: String,
+    pub ip_threat_username: String,
+    pub ip_threat_api_key: String,
     pub model_worker_concurrency: usize,
     pub model_job_queue_capacity: usize,
     pub export_worker_concurrency: usize,
@@ -31,6 +34,10 @@ impl AppConfig {
             env::var("MODEL_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
         let model_name = env::var("MODEL_NAME").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
         let api_key = env::var("API_KEY").unwrap_or_default();
+        let ip_threat_base_url = env::var("IP_THREAT_BASE_URL")
+            .unwrap_or_else(|_| "https://api13.scamalytics.com/v3".to_string());
+        let ip_threat_username = env::var("IP_THREAT_USERNAME").unwrap_or_default();
+        let ip_threat_api_key = env::var("IP_THREAT_API_KEY").unwrap_or_default();
         let model_worker_concurrency = env::var("MODEL_WORKER_CONCURRENCY")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -64,6 +71,9 @@ impl AppConfig {
             model_base_url,
             model_name,
             api_key,
+            ip_threat_base_url,
+            ip_threat_username,
+            ip_threat_api_key,
             model_worker_concurrency,
             model_job_queue_capacity,
             export_worker_concurrency,

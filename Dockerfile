@@ -41,7 +41,10 @@ ENV BIND_ADDR=0.0.0.0:8080 \
     MONGODB_DATABASE=geograba \
     MODEL_BASE_URL=https://api.openai.com/v1 \
     MODEL_NAME=gpt-4.1-mini \
-    API_KEY=
+    API_KEY= \
+    IP_THREAT_BASE_URL=https://api13.scamalytics.com/v3 \
+    IP_THREAT_USERNAME= \
+    IP_THREAT_API_KEY=
 
 EXPOSE 8080
 

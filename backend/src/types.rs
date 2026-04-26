@@ -474,6 +474,48 @@ pub struct ModelConfigView {
     pub api_key_set: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IpThreatConfigView {
+    pub configured: bool,
+    pub base_url: String,
+    pub username_set: bool,
+    pub api_key_set: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IpThreatSummary {
+    pub status: String,
+    pub score: Option<i64>,
+    pub risk: Option<String>,
+    pub isp_score: Option<i64>,
+    pub isp_risk: Option<String>,
+    pub is_proxy: Option<bool>,
+    pub is_vpn: Option<bool>,
+    pub is_tor: Option<bool>,
+    pub is_datacenter: Option<bool>,
+    pub is_public_proxy: Option<bool>,
+    pub is_web_proxy: Option<bool>,
+    pub is_anonymous: Option<bool>,
+    pub is_blacklisted: Option<bool>,
+    pub report_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IpThreatLookupResponse {
+    pub provider: String,
+    pub ip: String,
+    pub test_mode: bool,
+    pub provider_base_url: String,
+    pub summary: IpThreatSummary,
+    pub scamalytics: Option<Value>,
+    pub external_datasources: Option<Value>,
+    pub credits: Option<Value>,
+    pub raw: Value,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelConfigUpdateRequest {

@@ -152,11 +152,23 @@ pub async fn route_request(
                 None,
             ),
         )),
+        (Method::GET, "/api/v1/ip-threat/config") => Ok(json_response(
+            StatusCode::OK,
+            envelope(
+                true,
+                "IP_THREAT_CONFIG",
+                "current IP threat provider config",
+                request_id(),
+                Some(json!(state.ip_threat_client.view())),
+                None,
+            ),
+        )),
         (Method::POST, "/api/v1/auth/register") => register_user(request, state).await,
         (Method::POST, "/api/v1/auth/login") => login_user(request, state).await,
         (Method::GET, "/api/v1/auth/me") => get_current_session(request, state).await,
         (Method::POST, "/api/v1/auth/logout") => logout_user(request, state).await,
         (Method::PUT, "/api/v1/model/config") => update_model_config(request, state).await,
+        (Method::GET, "/api/v1/ip-threat/lookup") => lookup_ip_threat(request, state).await,
         (Method::GET, "/api/v1/projects") => list_projects(request, state).await,
         (Method::POST, "/api/v1/projects") => create_project(request, state).await,
         (Method::GET, "/api/v1/teams") => list_teams(request, state).await,
@@ -370,6 +382,41 @@ async fn update_model_config(
             "model config updated",
             request_id(),
             Some(json!(updated_state.model_client.view())),
+            None,
+        ),
+    ))
+}
+
+async fn lookup_ip_threat(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    require_auth(request.headers(), &state).await?;
+    let query = request.uri().query().unwrap_or_default();
+    let params = url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .collect::<std::collections::HashMap<String, String>>();
+
+    let ip = params
+        .get("ip")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::BadRequest("ip query parameter is required".to_string()))?;
+    let test_mode = params
+        .get("test")
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+
+    let result = state.ip_threat_client.lookup_ip(ip, test_mode).await?;
+
+    Ok(json_response(
+        StatusCode::OK,
+        envelope(
+            true,
+            "IP_THREAT_LOOKUP",
+            "IP threat lookup completed",
+            request_id(),
+            Some(json!(result)),
             None,
         ),
     ))

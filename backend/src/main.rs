@@ -10,6 +10,7 @@ mod model;
 mod state;
 mod storage;
 mod store;
+mod threat_intel;
 mod types;
 mod utils;
 

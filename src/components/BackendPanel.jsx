@@ -16,12 +16,56 @@ const STATUS_META = {
   },
 };
 
+const formatValue = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return '--';
+  }
+
+  return `${value}`;
+};
+
+const formatFlag = (value) => {
+  if (value === true) {
+    return 'Yes';
+  }
+
+  if (value === false) {
+    return 'No';
+  }
+
+  return '--';
+};
+
+const resolveThreatTone = (summary) => {
+  const risk = `${summary?.risk || ''}`.trim().toLowerCase();
+  const score = Number(summary?.score);
+
+  if (risk.includes('high') || score >= 75) {
+    return 'danger';
+  }
+
+  if (risk.includes('medium') || score >= 30) {
+    return 'warning';
+  }
+
+  if (risk.includes('low') || (!Number.isNaN(score) && score >= 0)) {
+    return 'success';
+  }
+
+  return 'neutral';
+};
+
 const BackendPanel = ({
   backendStatus,
   prompt,
   onPromptChange,
   selectedFile,
   onFileChange,
+  ipThreatDraft,
+  onIpThreatDraftChange,
+  onLookupIpThreat,
+  ipThreatResult,
+  isCheckingIpThreat,
   onGenerate,
   onPublish,
   onRequireAuth,
@@ -35,6 +79,8 @@ const BackendPanel = ({
   isPublishing = false,
 }) => {
   const statusMeta = STATUS_META[backendStatus?.state] ?? STATUS_META.checking;
+  const ipThreatSummary = ipThreatResult?.summary ?? null;
+  const ipThreatTone = resolveThreatTone(ipThreatSummary);
 
   return (
     <section className="backend-panel">
@@ -42,7 +88,7 @@ const BackendPanel = ({
         <div className="backend-panel-copy">
           <span className="panel-kicker">Backend Bridge</span>
           <h3>页面对接</h3>
-          <p>前端直接调用上传、绘图任务和分享接口，结果会回填编辑器并渲染到当前画布。</p>
+          <p>前端通过后端统一接入生成、分享和 IP 威胁查询，第三方密钥不会暴露在浏览器里。</p>
         </div>
 
         <div className={`backend-status backend-status-${statusMeta.tone}`}>
@@ -116,7 +162,7 @@ const BackendPanel = ({
           <p className="backend-auth-hint">
             {isAuthenticated
               ? `当前以后端身份 ${authUserLabel} 发起请求。`
-              : '登录后才能调用上传、AI 生成和分享接口。'}
+              : '登录后才能调用上传、AI 生成、IP 威胁查询和分享接口。'}
           </p>
         </article>
 
@@ -132,6 +178,16 @@ const BackendPanel = ({
             <div className="backend-metric">
               <span>Provider</span>
               <code>{backendStatus?.providerBaseUrl || '--'}</code>
+            </div>
+
+            <div className="backend-metric">
+              <span>Threat API</span>
+              <strong>{backendStatus?.ipThreatConfigured ? 'Configured' : 'Not configured'}</strong>
+            </div>
+
+            <div className="backend-metric">
+              <span>Threat Base</span>
+              <code>{backendStatus?.ipThreatBaseUrl || '--'}</code>
             </div>
 
             <div className="backend-metric">
@@ -184,6 +240,119 @@ const BackendPanel = ({
           )}
         </article>
       </div>
+
+      <article className="backend-card backend-card-full">
+        <div className="backend-card-head">
+          <div className="backend-card-head-copy">
+            <span className="backend-card-label">IP Threat Intelligence</span>
+            <strong className="backend-card-title">Scamalytics IP 风险查询</strong>
+          </div>
+          <span className={`backend-badge backend-badge-${backendStatus?.ipThreatConfigured ? 'success' : 'neutral'}`}>
+            {backendStatus?.ipThreatConfigured ? 'configured' : 'not configured'}
+          </span>
+        </div>
+
+        <div className="backend-threat-form">
+          <label className="backend-field">
+            <span>IP Address</span>
+            <input
+              type="text"
+              className="backend-input"
+              value={ipThreatDraft?.ip || ''}
+              onChange={(event) => onIpThreatDraftChange('ip', event.target.value)}
+              placeholder="8.8.8.8 或 2001:4860:4860::8888"
+            />
+          </label>
+
+          <label className="backend-check">
+            <input
+              type="checkbox"
+              checked={Boolean(ipThreatDraft?.testMode)}
+              onChange={(event) => onIpThreatDraftChange('testMode', event.target.checked)}
+            />
+            <span>使用测试模式</span>
+          </label>
+
+          <button
+            type="button"
+            className="backend-btn backend-btn-primary"
+            onClick={onLookupIpThreat}
+            disabled={!backendStatus?.ipThreatConfigured || !isAuthenticated || isCheckingIpThreat}
+          >
+            {isCheckingIpThreat ? '查询中...' : '查询 IP 威胁'}
+          </button>
+        </div>
+
+        <p className="backend-help">
+          第三方请求由后端代理发起，基础地址来自环境变量：
+          <code>{backendStatus?.ipThreatBaseUrl || '--'}</code>
+        </p>
+
+        {ipThreatResult && (
+          <div className="backend-threat-result">
+            <div className="backend-badges">
+              <span className={`backend-badge backend-badge-${ipThreatTone}`}>
+                {ipThreatSummary?.risk || ipThreatSummary?.status || 'unknown'}
+              </span>
+              <span className="backend-badge">score {formatValue(ipThreatSummary?.score)}</span>
+              <span className="backend-badge">
+                {ipThreatResult.testMode ? 'test mode' : 'live mode'}
+              </span>
+            </div>
+
+            <div className="backend-metadata backend-metadata-threat">
+              <div className="backend-metric">
+                <span>IP</span>
+                <strong>{formatValue(ipThreatResult.ip)}</strong>
+              </div>
+              <div className="backend-metric">
+                <span>Status</span>
+                <strong>{formatValue(ipThreatSummary?.status)}</strong>
+              </div>
+              <div className="backend-metric">
+                <span>ISP Score</span>
+                <strong>{formatValue(ipThreatSummary?.ispScore)}</strong>
+              </div>
+              <div className="backend-metric">
+                <span>ISP Risk</span>
+                <strong>{formatValue(ipThreatSummary?.ispRisk)}</strong>
+              </div>
+              <div className="backend-metric">
+                <span>VPN</span>
+                <strong>{formatFlag(ipThreatSummary?.isVpn)}</strong>
+              </div>
+              <div className="backend-metric">
+                <span>Tor</span>
+                <strong>{formatFlag(ipThreatSummary?.isTor)}</strong>
+              </div>
+              <div className="backend-metric">
+                <span>Datacenter</span>
+                <strong>{formatFlag(ipThreatSummary?.isDatacenter)}</strong>
+              </div>
+              <div className="backend-metric">
+                <span>Proxy</span>
+                <strong>{formatFlag(ipThreatSummary?.isProxy)}</strong>
+              </div>
+            </div>
+
+            {ipThreatSummary?.reportUrl && (
+              <a
+                href={ipThreatSummary.reportUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="backend-link"
+              >
+                打开 Scamalytics 报告
+              </a>
+            )}
+
+            <details className="backend-raw">
+              <summary>查看原始 JSON</summary>
+              <pre>{JSON.stringify(ipThreatResult.raw, null, 2)}</pre>
+            </details>
+          </div>
+        )}
+      </article>
     </section>
   );
 };
