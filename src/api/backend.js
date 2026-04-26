@@ -10,6 +10,19 @@ const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
 const WORKSPACE_STORAGE_KEY = 'geograba-workspace-key';
 const WORKSPACE_HEADER_NAME = 'X-Workspace-Key';
 let authToken = '';
+let unauthorizedHandler = null;
+
+const notifyUnauthorized = (error, payload = null) => {
+  if (typeof unauthorizedHandler !== 'function') {
+    return;
+  }
+
+  try {
+    unauthorizedHandler(error, payload);
+  } catch (_handlerError) {
+    // Ignore handler failures to preserve the original request error.
+  }
+};
 
 const buildUrl = (path) => {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
@@ -63,6 +76,9 @@ async function parseEnvelope(response) {
     const error = new Error(message);
     error.status = response.status;
     error.code = payload?.code || null;
+    if (response.status === 401 && authToken) {
+      notifyUnauthorized(error, payload);
+    }
     throw error;
   }
 
@@ -97,6 +113,10 @@ export function setAuthToken(value) {
 
 export function clearAuthToken() {
   authToken = '';
+}
+
+export function setUnauthorizedHandler(handler) {
+  unauthorizedHandler = typeof handler === 'function' ? handler : null;
 }
 
 export async function fetchHealth() {
@@ -244,6 +264,53 @@ export async function createProjectVersion(projectId, payload) {
   });
 }
 
+export async function listTeams() {
+  return request('/api/v1/teams');
+}
+
+export async function createTeam(payload) {
+  return request('/api/v1/teams', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function listTeamMembers(teamId) {
+  return request(`/api/v1/teams/${teamId}/members`);
+}
+
+export async function createTeamMember(teamId, payload) {
+  return request(`/api/v1/teams/${teamId}/members`, {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function listReviewComments(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      query.set(key, `${value}`);
+    }
+  });
+  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  return request(`/api/v1/review-comments${suffix}`);
+}
+
+export async function createReviewComment(payload) {
+  return request('/api/v1/review-comments', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function updateReviewComment(commentId, payload) {
+  return request(`/api/v1/review-comments/${commentId}`, {
+    method: 'PATCH',
+    body: payload,
+  });
+}
+
 export async function createExportJob(payload) {
   return request('/api/v1/exports', {
     method: 'POST',
@@ -255,8 +322,66 @@ export async function fetchExportJob(exportJobId) {
   return request(`/api/v1/exports/${exportJobId}`);
 }
 
-export function buildExportDownloadUrl(exportJobId) {
-  return buildUrl(`/api/v1/exports/${exportJobId}/download`);
+export async function pollExportJob(exportJobId, options = {}) {
+  const intervalMs = options.intervalMs ?? 1200;
+  const timeoutMs = options.timeoutMs ?? 60000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const result = await fetchExportJob(exportJobId);
+
+    if (result?.status === 'completed') {
+      return result;
+    }
+
+    if (result?.status === 'failed') {
+      throw new Error(result?.errorMessage || 'Export job failed');
+    }
+
+    if (typeof options.onUpdate === 'function') {
+      options.onUpdate(result);
+    }
+
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, intervalMs);
+    });
+  }
+
+  throw new Error('Polling export job timed out');
+}
+
+export async function downloadExportJob(exportJobId) {
+  const response = await fetch(buildUrl(`/api/v1/exports/${exportJobId}/download`), {
+    headers: {
+      Accept: 'application/octet-stream',
+      [WORKSPACE_HEADER_NAME]: getWorkspaceKey(),
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const message =
+      payload?.error?.message
+      || payload?.message
+      || `Backend request failed (${response.status})`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.code = payload?.code || null;
+    if (response.status === 401 && authToken) {
+      notifyUnauthorized(error, payload);
+    }
+    throw error;
+  }
+
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+
+  return {
+    blob: await response.blob(),
+    filename: filenameMatch?.[1] || `export-${exportJobId}`,
+    contentType: response.headers.get('Content-Type') || 'application/octet-stream',
+  };
 }
 
 export async function registerUser(payload) {

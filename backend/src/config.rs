@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub api_key: String,
     pub model_worker_concurrency: usize,
     pub model_job_queue_capacity: usize,
+    pub export_worker_concurrency: usize,
+    pub export_job_queue_capacity: usize,
     pub frontend_dist_dir: Option<PathBuf>,
     pub mongodb_uri: Option<String>,
     pub mongodb_database: String,
@@ -39,6 +41,16 @@ impl AppConfig {
             .and_then(|value| value.parse().ok())
             .unwrap_or(64)
             .max(1);
+        let export_worker_concurrency = env::var("EXPORT_WORKER_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(2)
+            .max(1);
+        let export_job_queue_capacity = env::var("EXPORT_JOB_QUEUE_CAPACITY")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(16)
+            .max(1);
         let frontend_dist_dir = env::var("FRONTEND_DIST_DIR").ok().map(PathBuf::from);
         let mongodb_uri = env::var("MONGODB_URI")
             .ok()
@@ -54,6 +66,8 @@ impl AppConfig {
             api_key,
             model_worker_concurrency,
             model_job_queue_capacity,
+            export_worker_concurrency,
+            export_job_queue_capacity,
             frontend_dist_dir,
             mongodb_uri,
             mongodb_database,

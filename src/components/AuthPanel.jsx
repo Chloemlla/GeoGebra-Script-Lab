@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import './AuthPanel.css';
 
 const STATUS_META = {
@@ -39,6 +39,7 @@ const AuthPanel = ({
   authState,
   authMode,
   authForm,
+  validation,
   isSubmitting,
   currentUser,
   sessionExpiresAt,
@@ -49,6 +50,23 @@ const AuthPanel = ({
   onLogout,
 }) => {
   const statusMeta = STATUS_META[authState?.state] ?? STATUS_META.guest;
+  const [showPasswords, setShowPasswords] = useState({
+    login: false,
+    register: false,
+    confirm: false,
+  });
+  const fieldErrors = validation?.fieldErrors ?? {};
+  const passwordStrength = validation?.passwordStrength ?? {
+    label: '',
+    tone: 'neutral',
+  };
+
+  const togglePasswordVisibility = (field) => {
+    setShowPasswords((prev) => ({
+      ...prev,
+      [field]: !prev[field],
+    }));
+  };
 
   return (
     <section className="auth-panel">
@@ -151,7 +169,11 @@ const AuthPanel = ({
                         onChange={(event) => onFieldChange('username', event.target.value)}
                         placeholder="仅限字母、数字、_、-"
                         autoComplete="username"
+                        aria-invalid={Boolean(fieldErrors.username)}
                       />
+                      <small className={`auth-field-hint ${fieldErrors.username ? 'is-error' : ''}`}>
+                        {fieldErrors.username || '将作为公开账号标识显示'}
+                      </small>
                     </label>
 
                     <label className="auth-field auth-field-full">
@@ -162,29 +184,63 @@ const AuthPanel = ({
                         onChange={(event) => onFieldChange('email', event.target.value)}
                         placeholder="name@example.com"
                         autoComplete="email"
+                        aria-invalid={Boolean(fieldErrors.email)}
                       />
+                      <small className={`auth-field-hint ${fieldErrors.email ? 'is-error' : ''}`}>
+                        {fieldErrors.email || '用于登录恢复和账号唯一性校验'}
+                      </small>
                     </label>
 
                     <label className="auth-field">
-                      <span>密码</span>
-                      <input
-                        type="password"
-                        value={authForm.password}
-                        onChange={(event) => onFieldChange('password', event.target.value)}
-                        placeholder="至少 8 位"
-                        autoComplete="new-password"
-                      />
+                      <div className="auth-field-head">
+                        <span>密码</span>
+                        <button
+                          type="button"
+                          className="auth-input-toggle"
+                          onClick={() => togglePasswordVisibility('register')}
+                        >
+                          {showPasswords.register ? '隐藏' : '显示'}
+                        </button>
+                      </div>
+                      <div className="auth-input-row">
+                        <input
+                          type={showPasswords.register ? 'text' : 'password'}
+                          value={authForm.password}
+                          onChange={(event) => onFieldChange('password', event.target.value)}
+                          placeholder="至少 8 位"
+                          autoComplete="new-password"
+                          aria-invalid={Boolean(fieldErrors.password)}
+                        />
+                      </div>
+                      <small className={`auth-field-hint ${fieldErrors.password ? 'is-error' : `is-${passwordStrength.tone}`}`}>
+                        {fieldErrors.password || passwordStrength.label}
+                      </small>
                     </label>
 
                     <label className="auth-field">
-                      <span>确认密码</span>
-                      <input
-                        type="password"
-                        value={authForm.confirmPassword}
-                        onChange={(event) => onFieldChange('confirmPassword', event.target.value)}
-                        placeholder="再次输入密码"
-                        autoComplete="new-password"
-                      />
+                      <div className="auth-field-head">
+                        <span>确认密码</span>
+                        <button
+                          type="button"
+                          className="auth-input-toggle"
+                          onClick={() => togglePasswordVisibility('confirm')}
+                        >
+                          {showPasswords.confirm ? '隐藏' : '显示'}
+                        </button>
+                      </div>
+                      <div className="auth-input-row">
+                        <input
+                          type={showPasswords.confirm ? 'text' : 'password'}
+                          value={authForm.confirmPassword}
+                          onChange={(event) => onFieldChange('confirmPassword', event.target.value)}
+                          placeholder="再次输入密码"
+                          autoComplete="new-password"
+                          aria-invalid={Boolean(fieldErrors.confirmPassword)}
+                        />
+                      </div>
+                      <small className={`auth-field-hint ${fieldErrors.confirmPassword ? 'is-error' : 'is-success'}`}>
+                        {fieldErrors.confirmPassword || '两次密码一致后即可直接创建账号'}
+                      </small>
                     </label>
                   </div>
                 ) : (
@@ -197,27 +253,50 @@ const AuthPanel = ({
                         onChange={(event) => onFieldChange('account', event.target.value)}
                         placeholder="输入邮箱或用户名"
                         autoComplete="username"
+                        aria-invalid={Boolean(fieldErrors.account)}
                       />
+                      <small className={`auth-field-hint ${fieldErrors.account ? 'is-error' : ''}`}>
+                        {fieldErrors.account || '支持邮箱或用户名登录'}
+                      </small>
                     </label>
 
                     <label className="auth-field auth-field-full">
-                      <span>密码</span>
-                      <input
-                        type="password"
-                        value={authForm.password}
-                        onChange={(event) => onFieldChange('password', event.target.value)}
-                        placeholder="输入密码"
-                        autoComplete="current-password"
-                      />
+                      <div className="auth-field-head">
+                        <span>密码</span>
+                        <button
+                          type="button"
+                          className="auth-input-toggle"
+                          onClick={() => togglePasswordVisibility('login')}
+                        >
+                          {showPasswords.login ? '隐藏' : '显示'}
+                        </button>
+                      </div>
+                      <div className="auth-input-row">
+                        <input
+                          type={showPasswords.login ? 'text' : 'password'}
+                          value={authForm.password}
+                          onChange={(event) => onFieldChange('password', event.target.value)}
+                          placeholder="输入密码"
+                          autoComplete="current-password"
+                          aria-invalid={Boolean(fieldErrors.password)}
+                        />
+                      </div>
+                      <small className={`auth-field-hint ${fieldErrors.password ? 'is-error' : ''}`}>
+                        {fieldErrors.password || '登录后会恢复云端项目与受保护接口权限'}
+                      </small>
                     </label>
                   </div>
                 )}
+
+                <p className={`auth-inline-note auth-inline-note-${passwordStrength.tone}`}>
+                  {validation?.formMessage || '认证成功后即可启用云端能力。'}
+                </p>
 
                 <div className="auth-actions">
                   <button
                     type="submit"
                     className="auth-btn auth-btn-primary"
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || !validation?.canSubmit}
                   >
                     {isSubmitting
                       ? '提交中...'
@@ -235,9 +314,9 @@ const AuthPanel = ({
           <span className="auth-card-label">Session Rules</span>
           <ul className="auth-checklist">
             <li>注册成功后会立即签发登录态，无需再次登录。</li>
-            <li>前端自动把 token 附加到上传、生成和分享请求。</li>
+            <li>前端自动把 token 附加到上传、生成、分享、云同步和导出请求。</li>
             <li>如果会话失效，受保护操作会提示重新登录。</li>
-            <li>PowerShell 调试命令建议固定为 UTF-8 JSON 输出。</li>
+            <li>未登录时仍可本地编辑，但云同步与后端队列会保持锁定。</li>
           </ul>
         </article>
       </div>

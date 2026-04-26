@@ -21,6 +21,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         state.config.model_worker_concurrency.max(1),
         state.config.model_job_queue_capacity.max(1)
     );
+    println!(
+        "export task dispatcher is enabled with concurrency {} and queue capacity {}",
+        state.config.export_worker_concurrency.max(1),
+        state.config.export_job_queue_capacity.max(1)
+    );
     if state.frontend_assets.files.is_empty() {
         println!("frontend asset hosting is disabled");
     } else {

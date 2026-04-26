@@ -19,7 +19,6 @@ import GeoGebraEngine from '../engine/GeoGebraEngine';
 import Preprocessor from '../engine/Preprocessor';
 import Dispatcher from '../engine/Dispatcher';
 import {
-  buildExportDownloadUrl,
   createAnnotationJob,
   clearAuthToken,
   createDrawingJob,
@@ -27,24 +26,33 @@ import {
   createObjectExplanations,
   createProject,
   createProjectVersion,
+  createReviewComment,
+  createTeam,
+  createTeamMember,
   createScriptInsights,
   createShare,
   fetchAdminDashboard,
   fetchHealth,
   fetchCurrentUser,
+  downloadExportJob,
   fetchModelConfig,
   fetchProject,
-  fetchExportJob,
   fetchShare,
   getWorkspaceKey,
   listProjects,
   listProjectVersions,
+  listReviewComments,
+  listTeamMembers,
+  listTeams,
   loginUser,
   logoutUser,
   pollDrawingJob,
+  pollExportJob,
   reserveUpload,
   registerUser,
   setAuthToken,
+  setUnauthorizedHandler,
+  updateReviewComment,
   updateProject,
   uploadAsset,
 } from '../api/backend';
@@ -530,6 +538,7 @@ const mapProjectToApiPayload = (project) => ({
   folder: project.folder,
   tags: project.tags ?? [],
   isFavorite: Boolean(project.isFavorite),
+  teamId: project.teamId ?? '__none__',
   canvasMode: project.canvasModeId,
   code: project.code,
   lastOpenedAt: project.lastOpenedAt,
@@ -543,6 +552,7 @@ const hydrateProjectFromApi = (remoteProject, localProject = null) => ({
   folder: remoteProject.folder,
   tags: remoteProject.tags ?? [],
   isFavorite: Boolean(remoteProject.isFavorite),
+  teamId: remoteProject.teamId ?? null,
   canvasModeId: remoteProject.canvasMode,
   code: remoteProject.latestCode,
   createdAt: remoteProject.createdAt,
@@ -561,6 +571,47 @@ const hydrateVersionFromApi = (version) => ({
   trigger: version.trigger,
   summary: version.summary,
 });
+
+const AUTH_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const AUTH_USERNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
+const UI_NOTICE_DURATION_MS = 4200;
+const UI_NOTICE_MAX_ITEMS = 4;
+
+const evaluatePasswordStrength = (password) => {
+  const value = typeof password === 'string' ? password : '';
+  const signals = [
+    value.length >= 8,
+    /[a-z]/.test(value) && /[A-Z]/.test(value),
+    /\d/.test(value),
+    /[^A-Za-z0-9]/.test(value),
+  ].filter(Boolean).length;
+
+  if (value.length === 0) {
+    return {
+      label: '等待输入密码',
+      tone: 'neutral',
+    };
+  }
+
+  if (signals <= 1) {
+    return {
+      label: '密码强度偏弱',
+      tone: 'danger',
+    };
+  }
+
+  if (signals === 2 || value.length < 10) {
+    return {
+      label: '密码强度中等',
+      tone: 'warning',
+    };
+  }
+
+  return {
+    label: '密码强度良好',
+    tone: 'success',
+  };
+};
 
 const App = () => {
   const storedStudioState = readStudioState();
@@ -607,6 +658,7 @@ const App = () => {
   );
   const [authSession, setAuthSession] = useState(storedAuthSession);
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
+  const [uiNotices, setUiNotices] = useState([]);
   const [authForm, setAuthForm] = useState({
     account: '',
     email: '',
@@ -625,10 +677,23 @@ const App = () => {
   const [savedProjects, setSavedProjects] = useState(storedStudioState.projects);
   const [currentProjectId, setCurrentProjectId] = useState(storedCurrentProject?.id ?? null);
   const [cloudSyncState, setCloudSyncState] = useState({
-    state: 'idle',
-    message: '等待首次云端同步',
+    state: storedAuthSession?.token ? 'idle' : 'neutral',
+    message: storedAuthSession?.token ? '等待恢复云同步能力' : '登录后启用云同步与导出队列',
     workspaceKey: getWorkspaceKey(),
     lastSyncedAt: null,
+  });
+  const [teams, setTeams] = useState([]);
+  const [selectedTeamId, setSelectedTeamId] = useState(storedCurrentProject?.teamId ?? '');
+  const [teamMembers, setTeamMembers] = useState([]);
+  const [teamDraft, setTeamDraft] = useState({
+    name: '',
+    description: '',
+    memberUserId: '',
+    memberRole: 'reviewer',
+  });
+  const [teamSyncState, setTeamSyncState] = useState({
+    state: 'idle',
+    message: '登录后可创建团队空间',
   });
   const [projectDraft, setProjectDraft] = useState({
     title: storedCurrentProject?.title ?? DEFAULT_PROJECT_TITLE,
@@ -673,6 +738,15 @@ const App = () => {
   });
   const [latestExportJob, setLatestExportJob] = useState(null);
   const [isCreatingExportJob, setIsCreatingExportJob] = useState(false);
+  const [reviewComments, setReviewComments] = useState([]);
+  const [reviewDraft, setReviewDraft] = useState({
+    body: '',
+    objectName: '',
+  });
+  const [reviewState, setReviewState] = useState({
+    state: 'idle',
+    message: '评论将绑定到项目版本或对象',
+  });
   const [generationPrompt, setGenerationPrompt] = useState(DEFAULT_GENERATION_PROMPT);
   const [referenceFile, setReferenceFile] = useState(null);
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
@@ -685,13 +759,16 @@ const App = () => {
   const dirtyWarningLoggedRef = useRef(false);
   const isExecutingRef = useRef(false);
   const canvasLockRef = useRef(isCanvasLocked);
+  const authPanelRef = useRef(null);
   const openSourceLinkRef = useRef(null);
   const queuedScriptRef = useRef(null);
   const workspaceShellRef = useRef(null);
   const driftBaselineCodeRef = useRef(null);
   const lecturePlayTokenRef = useRef(0);
   const hasInitializedWorkspaceRef = useRef(false);
-  const hasHydratedCloudProjectsRef = useRef(false);
+  const lastHydratedCloudUserIdRef = useRef(null);
+  const uiNoticeIdRef = useRef(0);
+  const uiNoticeTimersRef = useRef(new Map());
   const versionDraftStateRef = useRef(null);
   const initialShareSlugRef = useRef(
     typeof window !== 'undefined'
@@ -805,6 +882,66 @@ const App = () => {
     ? `${currentUser.displayName || currentUser.username} (@${currentUser.username})`
     : '';
   const canPublishShare = isAuthenticated && code.trim().length > 0 && !isExecuting && !isGeneratingScript;
+  const authValidation = useMemo(() => {
+    const fieldErrors = {
+      account: '',
+      email: '',
+      username: '',
+      password: '',
+      confirmPassword: '',
+    };
+
+    if (authMode === 'register') {
+      if (!authForm.email.trim()) {
+        fieldErrors.email = '请输入邮箱地址';
+      } else if (!AUTH_EMAIL_PATTERN.test(authForm.email.trim())) {
+        fieldErrors.email = '邮箱格式不正确';
+      }
+
+      if (!authForm.username.trim()) {
+        fieldErrors.username = '请输入用户名';
+      } else if (!AUTH_USERNAME_PATTERN.test(authForm.username.trim())) {
+        fieldErrors.username = '用户名需为 3-24 位字母、数字、_ 或 -';
+      }
+
+      if (!authForm.password) {
+        fieldErrors.password = '请输入密码';
+      } else if (authForm.password.length < 8) {
+        fieldErrors.password = '密码至少需要 8 位';
+      }
+
+      if (!authForm.confirmPassword) {
+        fieldErrors.confirmPassword = '请再次输入密码';
+      } else if (authForm.password !== authForm.confirmPassword) {
+        fieldErrors.confirmPassword = '两次输入的密码不一致';
+      }
+    } else {
+      if (!authForm.account.trim()) {
+        fieldErrors.account = '请输入邮箱或用户名';
+      }
+
+      if (!authForm.password) {
+        fieldErrors.password = '请输入密码';
+      }
+    }
+
+    const hasError = Object.values(fieldErrors).some(Boolean);
+    const passwordStrength = evaluatePasswordStrength(authForm.password);
+
+    return {
+      canSubmit: !hasError,
+      fieldErrors,
+      passwordStrength,
+      formMessage:
+        authMode === 'register'
+          ? hasError
+            ? '完善注册信息后会自动创建账号并立即登录。'
+            : '注册成功后会直接解锁云同步、上传、分享与导出能力。'
+          : hasError
+          ? '填写账号与密码后即可恢复后端身份。'
+          : '登录后将自动恢复云端项目、导出队列与后端受保护接口。',
+    };
+  }, [authForm.account, authForm.confirmPassword, authForm.email, authForm.password, authForm.username, authMode]);
 
   const normalizedProjectTags = useMemo(
     () => formatTagsInput(parseTagsInput(projectDraft.tagsInput)) || '未设置标签',
@@ -872,6 +1009,7 @@ const App = () => {
         folder: projectDraft.folder.trim() || DEFAULT_PROJECT_FOLDER,
         tags: parseTagsInput(projectDraft.tagsInput),
         isFavorite: projectDraft.isFavorite,
+        teamId: selectedTeamId || null,
         canvasModeId: selectedCanvasModeId,
         code,
         updatedAt: now,
@@ -894,34 +1032,49 @@ const App = () => {
       commitProjects(nextProjects, nextProject.id);
       return nextProject;
     },
-    [code, commitProjects, currentProjectId, projectDraft, savedProjects, selectedCanvasModeId]
+    [code, commitProjects, currentProjectId, projectDraft, savedProjects, selectedCanvasModeId, selectedTeamId]
   );
 
   const hydrateProjectVersionsFromCloud = useCallback(
     async (projectId) => {
-      if (!projectId) {
+      if (!projectId || !isAuthenticated) {
         return;
       }
 
-      const versions = await listProjectVersions(projectId);
-      const localProject = savedProjects.find((project) => project.id === projectId) ?? null;
-      if (!localProject) {
-        return;
-      }
+      try {
+        const versions = await listProjectVersions(projectId);
+        const localProject = savedProjects.find((project) => project.id === projectId) ?? null;
+        if (!localProject) {
+          return;
+        }
 
-      const nextProject = {
-        ...localProject,
-        versions: versions.map(hydrateVersionFromApi),
-      };
-      commitProjects(upsertProject(savedProjects, nextProject), projectId);
+        const nextProject = {
+          ...localProject,
+          versions: versions.map(hydrateVersionFromApi),
+        };
+        commitProjects(upsertProject(savedProjects, nextProject), projectId);
+      } catch (error) {
+        if (error?.status !== 401) {
+          pushUiNotice(`云端版本加载失败：${error.message}`, 'danger');
+        }
+      }
     },
-    [commitProjects, savedProjects]
+    [commitProjects, isAuthenticated, pushUiNotice, savedProjects]
   );
 
   const syncProjectToCloud = useCallback(
     async ({ project, versionLabel = null, trigger = 'autosave' }) => {
       if (!project) {
         return null;
+      }
+
+      if (!isAuthenticated) {
+        setCloudSyncState((prev) => ({
+          ...prev,
+          state: 'idle',
+          message: '当前仅保存在本地，登录后会自动接入云同步',
+        }));
+        return project;
       }
 
       setCloudSyncState((prev) => ({
@@ -984,8 +1137,218 @@ const App = () => {
         throw error;
       }
     },
-    [commitProjects, savedProjects]
+    [commitProjects, isAuthenticated, savedProjects]
   );
+
+  const refreshTeams = useCallback(async () => {
+    if (!isAuthenticated) {
+      setTeams([]);
+      setTeamMembers([]);
+      setTeamSyncState({
+        state: 'idle',
+        message: '登录后可创建团队空间',
+      });
+      return;
+    }
+
+    setTeamSyncState({
+      state: 'loading',
+      message: '正在拉取团队空间',
+    });
+
+    try {
+      const nextTeams = await listTeams();
+      setTeams(nextTeams);
+      setTeamSyncState({
+        state: 'ready',
+        message: `已同步 ${nextTeams.length} 个团队`,
+      });
+    } catch (error) {
+      if (!handleApiAuthFailure(error)) {
+        setTeamSyncState({
+          state: 'error',
+          message: error.message,
+        });
+      }
+    }
+  }, [handleApiAuthFailure, isAuthenticated]);
+
+  const refreshTeamMembers = useCallback(async () => {
+    if (!isAuthenticated || !selectedTeamId) {
+      setTeamMembers([]);
+      return;
+    }
+
+    try {
+      const memberships = await listTeamMembers(selectedTeamId);
+      setTeamMembers(memberships);
+    } catch (error) {
+      handleApiAuthFailure(error);
+    }
+  }, [handleApiAuthFailure, isAuthenticated, selectedTeamId]);
+
+  const handleCreateTeam = useCallback(async () => {
+    if (!ensureAuthenticatedForAction('请先登录后再创建团队空间')) {
+      return;
+    }
+
+    if (!teamDraft.name.trim()) {
+      alert('请输入团队名称');
+      return;
+    }
+
+    try {
+      const result = await createTeam({
+        name: teamDraft.name,
+        description: teamDraft.description,
+      });
+      setTeamDraft((prev) => ({
+        ...prev,
+        name: '',
+        description: '',
+      }));
+      setSelectedTeamId(result.team.teamId);
+      await refreshTeams();
+      appendLog(`已创建团队：${result.team.name}`, 'success');
+    } catch (error) {
+      if (!handleApiAuthFailure(error)) {
+        alert(error.message);
+      }
+    }
+  }, [appendLog, ensureAuthenticatedForAction, handleApiAuthFailure, refreshTeams, teamDraft.description, teamDraft.name]);
+
+  const handleAddTeamMember = useCallback(async () => {
+    if (!ensureAuthenticatedForAction('请先登录后再邀请团队成员')) {
+      return;
+    }
+    if (!selectedTeamId) {
+      alert('请先选择团队');
+      return;
+    }
+    if (!teamDraft.memberUserId.trim()) {
+      alert('请输入成员用户 ID');
+      return;
+    }
+
+    try {
+      await createTeamMember(selectedTeamId, {
+        userId: teamDraft.memberUserId.trim(),
+        role: teamDraft.memberRole,
+      });
+      setTeamDraft((prev) => ({
+        ...prev,
+        memberUserId: '',
+      }));
+      await refreshTeamMembers();
+      appendLog('团队成员已添加', 'success');
+    } catch (error) {
+      if (!handleApiAuthFailure(error)) {
+        alert(error.message);
+      }
+    }
+  }, [
+    appendLog,
+    ensureAuthenticatedForAction,
+    handleApiAuthFailure,
+    refreshTeamMembers,
+    selectedTeamId,
+    teamDraft.memberRole,
+    teamDraft.memberUserId,
+  ]);
+
+  const refreshReviewComments = useCallback(async () => {
+    if (!isAuthenticated || !currentProjectId) {
+      setReviewComments([]);
+      return;
+    }
+
+    try {
+      const comments = await listReviewComments({
+        projectId: currentProjectId,
+      });
+      setReviewComments(comments);
+      setReviewState({
+        state: 'ready',
+        message: `已加载 ${comments.length} 条评论`,
+      });
+    } catch (error) {
+      if (!handleApiAuthFailure(error)) {
+        setReviewState({
+          state: 'error',
+          message: error.message,
+        });
+      }
+    }
+  }, [currentProjectId, handleApiAuthFailure, isAuthenticated]);
+
+  const handleCreateReviewComment = useCallback(async () => {
+    if (!ensureAuthenticatedForAction('请先登录后再提交评论')) {
+      return;
+    }
+    if (!currentProjectId) {
+      alert('当前没有可评论的项目');
+      return;
+    }
+    if (!reviewDraft.body.trim()) {
+      alert('请输入评论内容');
+      return;
+    }
+
+    const activeVersion =
+      versionCursor >= 0
+        ? currentProject?.versions?.[versionCursor]?.id
+        : currentProject?.latestVersionId ?? null;
+
+    try {
+      await createReviewComment({
+        teamId: selectedTeamId || null,
+        projectId: currentProjectId,
+        versionId: activeVersion,
+        objectName: reviewDraft.objectName || null,
+        body: reviewDraft.body.trim(),
+      });
+      setReviewDraft({
+        body: '',
+        objectName: '',
+      });
+      await refreshReviewComments();
+      appendLog('评论已提交', 'success');
+    } catch (error) {
+      if (!handleApiAuthFailure(error)) {
+        alert(error.message);
+      }
+    }
+  }, [
+    appendLog,
+    currentProject?.latestVersionId,
+    currentProject?.versions,
+    currentProjectId,
+    ensureAuthenticatedForAction,
+    handleApiAuthFailure,
+    refreshReviewComments,
+    reviewDraft.body,
+    reviewDraft.objectName,
+    selectedTeamId,
+    versionCursor,
+  ]);
+
+  const handleResolveReviewComment = useCallback(async (commentId) => {
+    if (!ensureAuthenticatedForAction('请先登录后再更新评论')) {
+      return;
+    }
+
+    try {
+      await updateReviewComment(commentId, {
+        status: 'resolved',
+      });
+      await refreshReviewComments();
+      appendLog('评论已标记为 resolved', 'success');
+    } catch (error) {
+      if (!handleApiAuthFailure(error)) {
+        alert(error.message);
+      }
+    }
+  }, [appendLog, ensureAuthenticatedForAction, handleApiAuthFailure, refreshReviewComments]);
 
   const clearCanvasDrift = useCallback(() => {
     setCanvasDrift({
@@ -1008,6 +1371,49 @@ const App = () => {
     ]);
   }, []);
 
+  const dismissUiNotice = useCallback((noticeId) => {
+    const timer = uiNoticeTimersRef.current.get(noticeId);
+    if (timer) {
+      window.clearTimeout(timer);
+      uiNoticeTimersRef.current.delete(noticeId);
+    }
+
+    setUiNotices((prev) => prev.filter((item) => item.id !== noticeId));
+  }, []);
+
+  const pushUiNotice = useCallback((message, tone = 'info') => {
+    const normalizedMessage = typeof message === 'string' ? message.trim() : '';
+    if (!normalizedMessage) {
+      return;
+    }
+
+    const noticeId = `notice_${Date.now().toString(36)}_${uiNoticeIdRef.current++}`;
+    setUiNotices((prev) => [...prev, {
+      id: noticeId,
+      message: normalizedMessage,
+      tone,
+    }].slice(-UI_NOTICE_MAX_ITEMS));
+
+    const timer = window.setTimeout(() => {
+      dismissUiNotice(noticeId);
+    }, UI_NOTICE_DURATION_MS);
+    uiNoticeTimersRef.current.set(noticeId, timer);
+  }, [dismissUiNotice]);
+
+  const focusAuthentication = useCallback((message = '', mode = 'login') => {
+    setAuthMode(mode);
+    if (message) {
+      pushUiNotice(message, 'warning');
+    }
+
+    window.requestAnimationFrame(() => {
+      authPanelRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  }, [pushUiNotice]);
+
   const resetAuthForm = useCallback(() => {
     setAuthForm({
       account: '',
@@ -1026,6 +1432,19 @@ const App = () => {
     }));
   }, []);
 
+  const handleAuthModeChange = useCallback((nextMode) => {
+    setAuthMode(nextMode);
+    if (authState.state !== 'authenticated') {
+      setAuthState({
+        state: 'guest',
+        message:
+          nextMode === 'register'
+            ? '创建账号后会立即登录，并解锁云同步、上传、分享与导出。'
+            : '登录后即可恢复云端项目和所有受保护接口。',
+      });
+    }
+  }, [authState.state]);
+
   const applyAuthenticatedSession = useCallback(
     (session, successMessage) => {
       const normalizedSession = {
@@ -1041,11 +1460,17 @@ const App = () => {
         state: 'authenticated',
         message: `${normalizedSession.user.displayName || normalizedSession.user.username} 已登录`,
       });
+      setCloudSyncState((prev) => ({
+        ...prev,
+        state: 'idle',
+        message: '已登录，正在准备云同步',
+      }));
       writeStoredAuthSession(normalizedSession);
       resetAuthForm();
       appendLog(successMessage, 'success');
+      pushUiNotice(successMessage, 'success');
     },
-    [appendLog, resetAuthForm]
+    [appendLog, pushUiNotice, resetAuthForm]
   );
 
   const clearAuthentication = useCallback(
@@ -1057,12 +1482,23 @@ const App = () => {
         state: 'guest',
         message,
       });
+      setCloudSyncState((prev) => ({
+        ...prev,
+        state: 'idle',
+        message: '登录后启用云同步与导出队列',
+        lastSyncedAt: null,
+      }));
+      setLatestExportJob(null);
 
       if (message) {
         appendLog(message, level);
+        pushUiNotice(
+          message,
+          level === 'error' ? 'danger' : level === 'warning' ? 'warning' : 'info'
+        );
       }
     },
-    [appendLog]
+    [appendLog, pushUiNotice]
   );
 
   const handleApiAuthFailure = useCallback(
@@ -1072,34 +1508,28 @@ const App = () => {
       }
 
       clearAuthentication(fallbackMessage, 'error');
-      setAuthMode('login');
+      focusAuthentication('', 'login');
       return true;
     },
-    [clearAuthentication]
+    [clearAuthentication, focusAuthentication]
   );
+
+  const ensureAuthenticatedForAction = useCallback((message) => {
+    if (isAuthenticated) {
+      return true;
+    }
+
+    focusAuthentication(message, 'login');
+    return false;
+  }, [focusAuthentication, isAuthenticated]);
 
   const handleAuthSubmit = useCallback(async () => {
     if (isSubmittingAuth) {
       return;
     }
 
-    if (authMode === 'register') {
-      const email = authForm.email.trim();
-      const username = authForm.username.trim();
-      const password = authForm.password;
-      const confirmPassword = authForm.confirmPassword;
-
-      if (!email || !username || !password) {
-        alert('请完整填写注册信息');
-        return;
-      }
-
-      if (password !== confirmPassword) {
-        alert('两次输入的密码不一致');
-        return;
-      }
-    } else if (!authForm.account.trim() || !authForm.password) {
-      alert('请输入邮箱/用户名和密码');
+    if (!authValidation.canSubmit) {
+      pushUiNotice('请先修正认证表单中的字段提示', 'warning');
       return;
     }
 
@@ -1135,11 +1565,11 @@ const App = () => {
         message: error.message,
       });
       appendLog(`认证失败：${error.message}`, 'error');
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
     } finally {
       setIsSubmittingAuth(false);
     }
-  }, [applyAuthenticatedSession, appendLog, authForm, authMode, isSubmittingAuth]);
+  }, [applyAuthenticatedSession, appendLog, authForm, authMode, authValidation.canSubmit, isSubmittingAuth, pushUiNotice]);
 
   const handleLogout = useCallback(async () => {
     if (isSubmittingAuth) {
@@ -1262,6 +1692,10 @@ const App = () => {
           project: nextProject,
           versionLabel,
           trigger: 'execution',
+        }).catch((error) => {
+          if (error?.status !== 401) {
+            pushUiNotice(error.message, 'danger');
+          }
         });
       }
 
@@ -1271,6 +1705,7 @@ const App = () => {
       appendLog,
       clearCanvasDrift,
       isCompactLayout,
+      pushUiNotice,
       refreshCanvasObjects,
       saveProjectRecord,
       syncProjectToCloud,
@@ -1340,15 +1775,13 @@ const App = () => {
   }, []);
 
   const handleGenerateFromBackend = useCallback(async () => {
-    if (!isAuthenticated) {
-      setAuthMode('login');
-      alert('请先登录后再调用后端生成能力');
+    if (!ensureAuthenticatedForAction('请先登录后再调用后端生成能力')) {
       return;
     }
 
     const trimmedPrompt = generationPrompt.trim();
     if (!trimmedPrompt) {
-      alert('请输入要发送给后端的生成提示词');
+      pushUiNotice('请输入要发送给后端的生成提示词', 'warning');
       return;
     }
 
@@ -1405,7 +1838,6 @@ const App = () => {
         versionLabel: 'AI 生成脚本',
       });
     } catch (error) {
-      handleApiAuthFailure(error);
       setErrors([
         {
           message: error.message,
@@ -1413,25 +1845,25 @@ const App = () => {
         },
       ]);
       appendLog(`后端生成失败：${error.message}`, 'error');
-      alert(error.message);
+      if (error?.status !== 401) {
+        pushUiNotice(error.message, 'danger');
+      }
     } finally {
       setIsGeneratingScript(false);
     }
   }, [
     appendLog,
     canvasDrift.isDirty,
+    ensureAuthenticatedForAction,
     executePreparedCommands,
     generationPrompt,
-    handleApiAuthFailure,
-    isAuthenticated,
+    pushUiNotice,
     referenceFile,
     selectedCanvasModeId,
   ]);
 
   const handlePublishShare = useCallback(async () => {
-    if (!isAuthenticated) {
-      setAuthMode('login');
-      alert('请先登录后再发布分享');
+    if (!ensureAuthenticatedForAction('请先登录后再发布分享')) {
       return;
     }
 
@@ -1440,12 +1872,12 @@ const App = () => {
     try {
       commands = Preprocessor.clean(code);
     } catch (error) {
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
       return;
     }
 
     if (commands.length === 0) {
-      alert('当前没有可发布的脚本内容');
+      pushUiNotice('当前没有可发布的脚本内容', 'warning');
       return;
     }
 
@@ -1491,20 +1923,22 @@ const App = () => {
       });
       setActiveShareSlug(share.slug);
       appendLog(`分享已发布：${localShareUrl}`, 'success');
+      pushUiNotice(`分享已发布：${localShareUrl}`, 'success');
     } catch (error) {
-      handleApiAuthFailure(error);
       appendLog(`分享发布失败：${error.message}`, 'error');
-      alert(error.message);
+      if (error?.status !== 401) {
+        pushUiNotice(error.message, 'danger');
+      }
     } finally {
       setIsPublishingShare(false);
     }
   }, [
     appendLog,
     code,
+    ensureAuthenticatedForAction,
     generationPrompt,
-    handleApiAuthFailure,
-    isAuthenticated,
     latestJobResult,
+    pushUiNotice,
     selectedCanvasMode.label,
     selectedCanvasModeId,
   ]);
@@ -1576,7 +2010,7 @@ const App = () => {
 
   const handleRun = useCallback(async () => {
     if (!dispatcherRef.current) {
-      alert('GeoGebra 尚未初始化，请稍候...');
+      pushUiNotice('GeoGebra 尚未初始化，请稍候...', 'warning');
       return;
     }
 
@@ -1601,12 +2035,12 @@ const App = () => {
           timestamp: new Date(),
         },
       ]);
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
       return;
     }
 
     if (commands.length === 0) {
-      alert('没有有效的指令');
+      pushUiNotice('没有有效的指令', 'warning');
       return;
     }
 
@@ -1619,7 +2053,7 @@ const App = () => {
           timestamp: new Date(),
         }))
       );
-      alert(`代码验证失败，有 ${validation.errors.length} 个错误`);
+      pushUiNotice(`代码验证失败，有 ${validation.errors.length} 个错误`, 'danger');
       if (isCompactLayout) {
         setActiveTab('code');
       }
@@ -1629,7 +2063,12 @@ const App = () => {
     await executePreparedCommands(commands, {
       versionLabel: '运行脚本',
     });
-  }, [canvasDrift.isDirty, code, executePreparedCommands, isCompactLayout]);
+  }, [canvasDrift.isDirty, code, executePreparedCommands, isCompactLayout, pushUiNotice]);
+
+  const resetVersionBrowsing = useCallback(() => {
+    versionDraftStateRef.current = null;
+    setVersionCursor(-1);
+  }, []);
 
   const handleClear = useCallback(() => {
     GeoGebraEngine.clear();
@@ -1663,9 +2102,9 @@ const App = () => {
         },
       ]);
     } else {
-      alert('导出失败');
+      pushUiNotice('导出失败', 'danger');
     }
-  }, []);
+  }, [pushUiNotice]);
 
   const handleReset = useCallback(() => {
     GeoGebraEngine.reset();
@@ -1798,11 +2237,6 @@ const App = () => {
     [clearCanvasDrift, code, isCompactLayout, resetVersionBrowsing]
   );
 
-  const resetVersionBrowsing = useCallback(() => {
-    versionDraftStateRef.current = null;
-    setVersionCursor(-1);
-  }, []);
-
   const loadProjectIntoEditor = useCallback(
     (project) => {
       if (!project) {
@@ -1828,6 +2262,7 @@ const App = () => {
         tagsInput: formatTagsInput(project.tags),
         isFavorite: Boolean(project.isFavorite),
       });
+      setSelectedTeamId(project.teamId || '');
       setCode(project.code || `${DEFAULT_CODE.trim()}\n`);
       setErrors([]);
       setExecutionStats(null);
@@ -1891,6 +2326,7 @@ const App = () => {
       tagsInput: formatTagsInput(project.tags),
       isFavorite: false,
     });
+    setSelectedTeamId('');
     setCode(project.code);
     setSelectedCanvasModeId(DEFAULT_CANVAS_MODE_ID);
     setScriptInsights(null);
@@ -1909,13 +2345,23 @@ const App = () => {
       markOpened: true,
     });
     resetVersionBrowsing();
+    appendLog(`项目已保存：${project.title}`, 'success');
+
+    if (!isAuthenticated) {
+      pushUiNotice('项目已保存到本地，登录后可同步到云端', 'info');
+      return;
+    }
+
     void syncProjectToCloud({
       project,
       versionLabel: '手动保存',
       trigger: 'manual',
+    }).catch((error) => {
+      if (error?.status !== 401) {
+        pushUiNotice(error.message, 'danger');
+      }
     });
-    appendLog(`项目已保存：${project.title}`, 'success');
-  }, [appendLog, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
+  }, [appendLog, isAuthenticated, pushUiNotice, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
 
   const handleSaveSnapshot = useCallback(() => {
     const project = saveProjectRecord({
@@ -1923,13 +2369,23 @@ const App = () => {
       trigger: 'snapshot',
     });
     resetVersionBrowsing();
+    appendLog(`已为 ${project.title} 创建快照`, 'info');
+
+    if (!isAuthenticated) {
+      pushUiNotice('快照已保存在本地版本库，登录后可同步到云端', 'info');
+      return;
+    }
+
     void syncProjectToCloud({
       project,
       versionLabel: '手动快照',
       trigger: 'snapshot',
+    }).catch((error) => {
+      if (error?.status !== 401) {
+        pushUiNotice(error.message, 'danger');
+      }
     });
-    appendLog(`已为 ${project.title} 创建快照`, 'info');
-  }, [appendLog, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
+  }, [appendLog, isAuthenticated, pushUiNotice, resetVersionBrowsing, saveProjectRecord, syncProjectToCloud]);
 
   const applyVersionState = useCallback(
     (version, cursor) => {
@@ -2067,7 +2523,7 @@ const App = () => {
   const handleApplyParameters = useCallback(
     async (shouldRun = false) => {
       if (parameterControls.length === 0) {
-        alert('当前脚本中没有可控制的简单参数。');
+        pushUiNotice('当前脚本中没有可控制的简单参数。', 'warning');
         return;
       }
 
@@ -2090,7 +2546,7 @@ const App = () => {
         versionLabel: '参数调参',
       });
     },
-    [appendLog, code, executePreparedCommands, parameterControls, parameterValues]
+    [appendLog, code, executePreparedCommands, parameterControls, parameterValues, pushUiNotice]
   );
 
   const handleToggleDriftName = useCallback((name) => {
@@ -2103,7 +2559,7 @@ const App = () => {
     const pointStates = GeoGebraEngine.exportFreePointsAsCode(selectedDriftNames);
 
     if (pointStates.length === 0) {
-      alert('请先选择需要同步回代码的自由点。');
+      pushUiNotice('请先选择需要同步回代码的自由点。', 'warning');
       return;
     }
 
@@ -2137,6 +2593,10 @@ const App = () => {
       },
       versionLabel: '同步自由点',
       trigger: 'canvas_sync',
+    }).catch((error) => {
+      if (error?.status !== 401) {
+        pushUiNotice(error.message, 'danger');
+      }
     });
     setActiveTab('code');
     appendLog(
@@ -2158,6 +2618,7 @@ const App = () => {
     projectDraft.isFavorite,
     projectDraft.tagsInput,
     projectDraft.title,
+    pushUiNotice,
     syncProjectToCloud,
   ]);
 
@@ -2221,12 +2682,12 @@ const App = () => {
     try {
       commands = Preprocessor.clean(code);
     } catch (error) {
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
       return;
     }
 
     if (commands.length === 0) {
-      alert('当前脚本没有可讲解的命令。');
+      pushUiNotice('当前脚本没有可讲解的命令。', 'warning');
       return;
     }
 
@@ -2237,7 +2698,7 @@ const App = () => {
       isPlaying: false,
     });
     appendLog(`讲解模式已准备，共 ${commands.length} 步`, 'info');
-  }, [appendLog, code]);
+  }, [appendLog, code, pushUiNotice]);
 
   const handlePreviousLectureStep = useCallback(async () => {
     if (lectureState.commands.length === 0) {
@@ -2266,12 +2727,12 @@ const App = () => {
       try {
         commands = Preprocessor.clean(code);
       } catch (error) {
-        alert(error.message);
+        pushUiNotice(error.message, 'danger');
         return;
       }
 
       if (commands.length === 0) {
-        alert('当前脚本没有可讲解的命令。');
+        pushUiNotice('当前脚本没有可讲解的命令。', 'warning');
         return;
       }
 
@@ -2306,7 +2767,7 @@ const App = () => {
       ...prev,
       isPlaying: false,
     }));
-  }, [code, lectureState.commands, lectureState.currentStep, runLectureStep]);
+  }, [code, lectureState.commands, lectureState.currentStep, pushUiNotice, runLectureStep]);
 
   const handleStopLecture = useCallback(() => {
     lecturePlayTokenRef.current++;
@@ -2339,12 +2800,12 @@ const App = () => {
     try {
       commands = Preprocessor.clean(code);
     } catch (error) {
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
       return;
     }
 
     if (commands.length === 0) {
-      alert('当前脚本为空，无法生成解读。');
+      pushUiNotice('当前脚本为空，无法生成解读。', 'warning');
       return;
     }
 
@@ -2360,11 +2821,11 @@ const App = () => {
       appendLog('已生成图形解释与标注建议', 'success');
     } catch (error) {
       appendLog(`图形解释生成失败：${error.message}`, 'error');
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
     } finally {
       setIsGeneratingInsights(false);
     }
-  }, [appendLog, code, generationPrompt]);
+  }, [appendLog, code, generationPrompt, pushUiNotice]);
 
   const handleAppendInsightComments = useCallback(() => {
     if (!scriptInsights) {
@@ -2381,12 +2842,12 @@ const App = () => {
     try {
       commands = Preprocessor.clean(code);
     } catch (error) {
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
       return;
     }
 
     if (commands.length === 0) {
-      alert('当前脚本为空，无法生成对象级标注。');
+      pushUiNotice('当前脚本为空，无法生成对象级标注。', 'warning');
       return;
     }
 
@@ -2404,11 +2865,11 @@ const App = () => {
       appendLog('已生成对象级标注建议', 'success');
     } catch (error) {
       appendLog(`对象级标注生成失败：${error.message}`, 'error');
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
     } finally {
       setIsGeneratingAnnotations(false);
     }
-  }, [appendLog, code, generationPrompt, selectedCanvasModeId]);
+  }, [appendLog, code, generationPrompt, pushUiNotice, selectedCanvasModeId]);
 
   const handleToggleAnnotationSelection = useCallback((annotationId) => {
     setSelectedAnnotationIds((prev) =>
@@ -2425,7 +2886,7 @@ const App = () => {
       .filter(Boolean);
 
     if (commands.length === 0) {
-      alert('请先选择要回写的标注。');
+      pushUiNotice('请先选择要回写的标注。', 'warning');
       return;
     }
 
@@ -2437,7 +2898,7 @@ const App = () => {
       logMessage: '对象级标注已回写并重新渲染',
       versionLabel: 'AI 标注回写',
     });
-  }, [annotationJobResult?.annotations, code, executePreparedCommands, selectedAnnotationIds, appendLog]);
+  }, [annotationJobResult?.annotations, code, executePreparedCommands, selectedAnnotationIds, appendLog, pushUiNotice]);
 
   const handleGenerateObjectExplanations = useCallback(async () => {
     let commands = [];
@@ -2445,12 +2906,12 @@ const App = () => {
     try {
       commands = Preprocessor.clean(code);
     } catch (error) {
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
       return;
     }
 
     if (commands.length === 0) {
-      alert('当前脚本为空，无法生成对象解释。');
+      pushUiNotice('当前脚本为空，无法生成对象解释。', 'warning');
       return;
     }
 
@@ -2467,32 +2928,58 @@ const App = () => {
       appendLog('已生成对象级依赖解释', 'success');
     } catch (error) {
       appendLog(`对象解释生成失败：${error.message}`, 'error');
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
     } finally {
       setIsGeneratingObjectExplanations(false);
     }
-  }, [appendLog, code, focusObjectNames, selectedCanvasModeId]);
+  }, [appendLog, code, focusObjectNames, pushUiNotice, selectedCanvasModeId]);
 
   const handleCreateExportMatrixJob = useCallback(async () => {
+    if (!ensureAuthenticatedForAction('请先登录后再创建导出任务')) {
+      return;
+    }
+
     let commands = [];
 
     try {
       commands = Preprocessor.clean(code);
     } catch (error) {
-      alert(error.message);
+      pushUiNotice(error.message, 'danger');
       return;
     }
 
     if (commands.length === 0) {
-      alert('当前脚本为空，无法导出。');
+      pushUiNotice('当前脚本为空，无法导出。', 'warning');
       return;
     }
 
     setIsCreatingExportJob(true);
 
     try {
+      const imageData = await GeoGebraEngine.exportImage();
+      let exportAssetId = null;
+
+      if (imageData) {
+        const coverFile = await dataUrlToFile(imageData, `export-cover-${Date.now()}.png`);
+        const uploadTicket = await reserveUpload({
+          filename: coverFile.name,
+          mimeType: coverFile.type,
+          size: coverFile.size,
+          purpose: 'export_cover',
+          canvasMode: selectedCanvasModeId,
+        });
+
+        await uploadAsset({
+          uploadUrl: uploadTicket.uploadUrl,
+          file: coverFile,
+          mimeType: coverFile.type,
+        });
+        exportAssetId = uploadTicket.assetId;
+      }
+
       const job = await createExportJob({
         projectId: currentProjectId,
+        assetId: exportAssetId,
         title: projectDraft.title.trim() || DEFAULT_PROJECT_TITLE,
         canvasMode: selectedCanvasModeId,
         commands,
@@ -2505,12 +2992,15 @@ const App = () => {
         },
       });
 
-      const latest = await fetchExportJob(job.exportJobId);
+      const latest = await pollExportJob(job.exportJobId);
       setLatestExportJob(latest);
       appendLog(`已创建 ${exportDraft.format.toUpperCase()} 导出任务`, 'success');
+      pushUiNotice(`已创建 ${exportDraft.format.toUpperCase()} 导出任务`, 'success');
     } catch (error) {
       appendLog(`导出任务创建失败：${error.message}`, 'error');
-      alert(error.message);
+      if (error?.status !== 401) {
+        pushUiNotice(error.message, 'danger');
+      }
     } finally {
       setIsCreatingExportJob(false);
     }
@@ -2518,14 +3008,44 @@ const App = () => {
     appendLog,
     code,
     currentProjectId,
+    ensureAuthenticatedForAction,
     exportDraft.format,
     exportDraft.height,
     exportDraft.includeAxes,
     exportDraft.includeGrid,
     exportDraft.width,
     projectDraft.title,
+    pushUiNotice,
+    pollExportJob,
     selectedCanvasModeId,
   ]);
+
+  const handleDownloadLatestExportJob = useCallback(async () => {
+    if (!latestExportJob?.exportJobId) {
+      return;
+    }
+
+    if (!ensureAuthenticatedForAction('请先登录后再下载导出结果')) {
+      return;
+    }
+
+    try {
+      const result = await downloadExportJob(latestExportJob.exportJobId);
+      const objectUrl = URL.createObjectURL(result.blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = result.filename;
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+      appendLog(`已下载导出结果：${result.filename}`, 'success');
+      pushUiNotice(`已下载导出结果：${result.filename}`, 'success');
+    } catch (error) {
+      appendLog(`导出结果下载失败：${error.message}`, 'error');
+      if (error?.status !== 401) {
+        pushUiNotice(error.message, 'danger');
+      }
+    }
+  }, [appendLog, ensureAuthenticatedForAction, latestExportJob?.exportJobId, pushUiNotice]);
 
   const handleExportScriptFile = useCallback(() => {
     downloadTextFile(
@@ -2545,9 +3065,24 @@ const App = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => () => {
+    uiNoticeTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    uiNoticeTimersRef.current.clear();
+  }, []);
+
   useEffect(() => {
     isExecutingRef.current = isExecuting;
   }, [isExecuting]);
+
+  useEffect(() => {
+    setUnauthorizedHandler((error) => {
+      handleApiAuthFailure(error);
+    });
+
+    return () => {
+      setUnauthorizedHandler(null);
+    };
+  }, [handleApiAuthFailure]);
 
   useEffect(() => {
     if (hasInitializedWorkspaceRef.current || initialShareSlugRef.current) {
@@ -2597,11 +3132,22 @@ const App = () => {
   }, [code, commitProjects, selectedCanvasModeId, storedStudioState.projects, storedStudioState.currentProjectId]);
 
   useEffect(() => {
-    if (hasHydratedCloudProjectsRef.current) {
+    if (!isAuthenticated || !currentUser?.userId) {
+      lastHydratedCloudUserIdRef.current = null;
+      setCloudSyncState((prev) => ({
+        ...prev,
+        state: 'idle',
+        message: '登录后启用云同步与导出队列',
+        lastSyncedAt: null,
+      }));
       return;
     }
 
-    hasHydratedCloudProjectsRef.current = true;
+    if (lastHydratedCloudUserIdRef.current === currentUser.userId) {
+      return;
+    }
+
+    lastHydratedCloudUserIdRef.current = currentUser.userId;
     let isCancelled = false;
 
     const hydrateProjectsFromCloud = async () => {
@@ -2673,7 +3219,19 @@ const App = () => {
     return () => {
       isCancelled = true;
     };
-  }, [commitProjects, currentProjectId, hydrateProjectVersionsFromCloud, savedProjects]);
+  }, [commitProjects, currentProjectId, currentUser?.userId, hydrateProjectVersionsFromCloud, isAuthenticated, savedProjects]);
+
+  useEffect(() => {
+    void refreshTeams();
+  }, [refreshTeams]);
+
+  useEffect(() => {
+    void refreshTeamMembers();
+  }, [refreshTeamMembers]);
+
+  useEffect(() => {
+    void refreshReviewComments();
+  }, [refreshReviewComments]);
 
   useEffect(() => {
     if (!hasInitializedWorkspaceRef.current) {
@@ -2686,9 +3244,11 @@ const App = () => {
 
     const timer = window.setTimeout(() => {
       const project = saveProjectRecord();
-      void syncProjectToCloud({
-        project,
-      });
+      if (isAuthenticated) {
+        void syncProjectToCloud({
+          project,
+        }).catch(() => {});
+      }
     }, 800);
 
     return () => window.clearTimeout(timer);
@@ -2700,6 +3260,7 @@ const App = () => {
     projectDraft.title,
     saveProjectRecord,
     selectedCanvasModeId,
+    isAuthenticated,
     syncProjectToCloud,
     versionCursor,
   ]);
@@ -2732,6 +3293,10 @@ const App = () => {
       return preserved.length > 0 ? preserved : nextNames;
     });
   }, [pointDiffs]);
+
+  useEffect(() => {
+    setSelectedTeamId(currentProject?.teamId || '');
+  }, [currentProject?.teamId]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -2807,16 +3372,14 @@ const App = () => {
           return;
         }
 
-        clearAuthToken();
-        clearStoredAuthSession();
-        setAuthSession(null);
-        setAuthState({
-          state: 'guest',
-          message:
-            error?.status === 401
-              ? '登录会话已失效，请重新登录'
-              : `会话恢复失败：${error.message}`,
-        });
+        if (error?.status === 401) {
+          return;
+        }
+
+        clearAuthentication(
+          `会话恢复失败：${error.message}`,
+          'error'
+        );
       }
     };
 
@@ -2825,7 +3388,7 @@ const App = () => {
     return () => {
       isCancelled = true;
     };
-  }, [storedAuthSession]);
+  }, [clearAuthentication, storedAuthSession]);
 
   useEffect(() => {
     void refreshAdminDashboard();
@@ -3028,19 +3591,40 @@ const App = () => {
           </div>
         </div>
 
-        <AuthPanel
-          authState={authState}
-          authMode={authMode}
-          authForm={authForm}
-          isSubmitting={isSubmittingAuth}
-          currentUser={currentUser}
-          sessionExpiresAt={authSession?.expiresAt ?? null}
-          isAuthenticated={isAuthenticated}
-          onModeChange={setAuthMode}
-          onFieldChange={handleAuthFieldChange}
-          onSubmit={handleAuthSubmit}
-          onLogout={handleLogout}
-        />
+        {uiNotices.length > 0 && (
+          <div className="ui-notice-stack" aria-live="polite">
+            {uiNotices.map((notice) => (
+              <article key={notice.id} className={`ui-notice ui-notice-${notice.tone}`}>
+                <span>{notice.message}</span>
+                <button
+                  type="button"
+                  className="ui-notice-close"
+                  onClick={() => dismissUiNotice(notice.id)}
+                  aria-label="关闭提示"
+                >
+                  ×
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
+
+        <div ref={authPanelRef}>
+          <AuthPanel
+            authState={authState}
+            authMode={authMode}
+            authForm={authForm}
+            validation={authValidation}
+            isSubmitting={isSubmittingAuth}
+            currentUser={currentUser}
+            sessionExpiresAt={authSession?.expiresAt ?? null}
+            isAuthenticated={isAuthenticated}
+            onModeChange={handleAuthModeChange}
+            onFieldChange={handleAuthFieldChange}
+            onSubmit={handleAuthSubmit}
+            onLogout={handleLogout}
+          />
+        </div>
 
         <section className="chapter chapter-dark">
           <header className="hero-panel">
@@ -3410,7 +3994,9 @@ const App = () => {
                         {cloudSyncState.message}
                       </span>
                       <small>
-                        Workspace: {cloudSyncState.workspaceKey}
+                        {isAuthenticated
+                          ? `当前账号：${authUserLabel}`
+                          : '当前仍处于本地工作区模式'}
                         {cloudSyncState.lastSyncedAt
                           ? ` · 最近同步 ${new Date(cloudSyncState.lastSyncedAt).toLocaleString('zh-CN')}`
                           : ''}
@@ -3507,6 +4093,139 @@ const App = () => {
                       </div>
                     )}
                   </article>
+
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Team Space</span>
+                        <strong>团队项目空间</strong>
+                      </div>
+                      <span className="meta-pill meta-pill-neutral">{teamSyncState.message}</span>
+                    </div>
+
+                    <div className="studio-field-grid">
+                      <label className="studio-field">
+                        <span>新团队名称</span>
+                        <input
+                          type="text"
+                          value={teamDraft.name}
+                          onChange={(event) =>
+                            setTeamDraft((prev) => ({
+                              ...prev,
+                              name: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="studio-field">
+                        <span>团队描述</span>
+                        <input
+                          type="text"
+                          value={teamDraft.description}
+                          onChange={(event) =>
+                            setTeamDraft((prev) => ({
+                              ...prev,
+                              description: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    <div className="studio-action-row">
+                      <button type="button" className="studio-btn studio-btn-primary" onClick={handleCreateTeam}>
+                        创建团队
+                      </button>
+                    </div>
+
+                    <label className="studio-field">
+                      <span>当前项目所属团队</span>
+                      <select
+                        className="studio-input"
+                        value={selectedTeamId}
+                        onChange={(event) => setSelectedTeamId(event.target.value)}
+                      >
+                        <option value="">个人空间</option>
+                        {teams.map((team) => (
+                          <option key={team.teamId} value={team.teamId}>
+                            {team.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    {selectedTeamId && (
+                      <>
+                        <div className="studio-field-grid">
+                          <label className="studio-field">
+                            <span>成员用户 ID</span>
+                            <input
+                              type="text"
+                              value={teamDraft.memberUserId}
+                              onChange={(event) =>
+                                setTeamDraft((prev) => ({
+                                  ...prev,
+                                  memberUserId: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="studio-field">
+                            <span>角色</span>
+                            <select
+                              className="studio-input"
+                              value={teamDraft.memberRole}
+                              onChange={(event) =>
+                                setTeamDraft((prev) => ({
+                                  ...prev,
+                                  memberRole: event.target.value,
+                                }))
+                              }
+                            >
+                              <option value="admin">Admin</option>
+                              <option value="editor">Editor</option>
+                              <option value="reviewer">Reviewer</option>
+                              <option value="viewer">Viewer</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <div className="studio-action-row">
+                          <button type="button" className="studio-btn" onClick={handleAddTeamMember}>
+                            添加成员
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    <div className="studio-list">
+                      {teams.map((team) => (
+                        <button
+                          key={team.teamId}
+                          type="button"
+                          className={`studio-list-item ${selectedTeamId === team.teamId ? 'active' : ''}`}
+                          onClick={() => setSelectedTeamId(team.teamId)}
+                        >
+                          <strong>{team.name}</strong>
+                          <span>{team.description || '无描述'}</span>
+                          <small>{team.slug}</small>
+                        </button>
+                      ))}
+                    </div>
+
+                    {teamMembers.length > 0 && (
+                      <div className="version-list">
+                        {teamMembers.map((member) => (
+                          <article key={member.membershipId} className="version-item">
+                            <div className="version-item-copy">
+                              <strong>{member.userId}</strong>
+                              <span>{member.role}</span>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </article>
                 </div>
 
               <BackendPanel
@@ -3517,6 +4236,7 @@ const App = () => {
                 onFileChange={handleReferenceFileChange}
                 onGenerate={handleGenerateFromBackend}
                 onPublish={handlePublishShare}
+                onRequireAuth={() => focusAuthentication('登录后即可调用后端 Bridge 能力')}
                 latestJobResult={latestJobResult}
                 latestShare={latestShare}
                 activeShareSlug={activeShareSlug}
@@ -3753,6 +4473,82 @@ const App = () => {
                         <article key={note.title} className="micro-card">
                           <strong>{note.title}</strong>
                           <p>{note.description}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="studio-card">
+                    <div className="studio-card-head">
+                      <div>
+                        <span className="card-kicker">Review</span>
+                        <strong>审阅与评论</strong>
+                      </div>
+                      <span className="meta-pill meta-pill-neutral">{reviewState.message}</span>
+                    </div>
+
+                    <label className="studio-field">
+                      <span>绑定对象</span>
+                      <select
+                        className="studio-input"
+                        value={reviewDraft.objectName}
+                        onChange={(event) =>
+                          setReviewDraft((prev) => ({
+                            ...prev,
+                            objectName: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">仅绑定到当前版本</option>
+                        {availableObjectNames.map((objectName) => (
+                          <option key={objectName} value={objectName}>
+                            {objectName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="studio-field">
+                      <span>评论内容</span>
+                      <textarea
+                        className="backend-prompt"
+                        rows={4}
+                        value={reviewDraft.body}
+                        onChange={(event) =>
+                          setReviewDraft((prev) => ({
+                            ...prev,
+                            body: event.target.value,
+                          }))
+                        }
+                        placeholder="评论必须绑定到项目版本或对象"
+                      />
+                    </label>
+
+                    <div className="studio-action-row">
+                      <button type="button" className="studio-btn studio-btn-primary" onClick={handleCreateReviewComment}>
+                        提交评论
+                      </button>
+                    </div>
+
+                    <div className="version-list">
+                      {reviewComments.map((comment) => (
+                        <article key={comment.commentId} className="version-item">
+                          <div className="version-item-copy">
+                            <strong>{comment.objectName || comment.versionId || '项目评论'}</strong>
+                            <span>{comment.status} · {new Date(comment.updatedAt).toLocaleString('zh-CN')}</span>
+                            <small>{comment.body}</small>
+                          </div>
+                          {comment.status !== 'resolved' && (
+                            <div className="version-item-actions">
+                              <button
+                                type="button"
+                                className="studio-inline-btn"
+                                onClick={() => handleResolveReviewComment(comment.commentId)}
+                              >
+                                标记 resolved
+                              </button>
+                            </div>
+                          )}
                         </article>
                       ))}
                     </div>
@@ -4162,19 +4958,19 @@ const App = () => {
                         type="button"
                         className="studio-btn studio-btn-primary"
                         onClick={handleCreateExportMatrixJob}
-                        disabled={isCreatingExportJob}
+                        disabled={!isAuthenticated || isCreatingExportJob}
                       >
                         {isCreatingExportJob ? '导出中...' : '创建导出任务'}
                       </button>
                       {latestExportJob && (
-                        <a
+                        <button
+                          type="button"
                           className="studio-btn"
-                          href={buildExportDownloadUrl(latestExportJob.exportJobId)}
-                          target="_blank"
-                          rel="noreferrer"
+                          onClick={handleDownloadLatestExportJob}
+                          disabled={!isAuthenticated}
                         >
                           下载结果
-                        </a>
+                        </button>
                       )}
                     </div>
 
@@ -4187,6 +4983,12 @@ const App = () => {
                           <p>文件：{latestExportJob.downloadName}</p>
                         </div>
                       </div>
+                    )}
+
+                    {!isAuthenticated && (
+                      <p className="studio-empty">
+                        登录后才会启用后端导出队列，并将任务与下载权限绑定到当前账号。
+                      </p>
                     )}
                   </article>
                 </div>

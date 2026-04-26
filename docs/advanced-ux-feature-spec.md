@@ -432,21 +432,22 @@ X-Workspace-Key: wk_xxxxxxxxxxxxx
 - `svg`
   - 后端直接生成可下载 SVG
 - `pdf`
-  - 当前生成 PDF 导出说明文件 `pdf.txt`
+  - 后端生成真实 PDF 文件
 - `gif / mp4 / pptx / ggb`
-  - 当前生成结构化任务结果 `*.json`
-  - 用于先打通前后端、任务模型和下载链路
-  - 真实渲染器后续替换该实现
+  - `gif / mp4` 已进入异步导出任务队列
+  - `pptx / ggb` 当前仍是结构化导出任务结果，用于保持协议稳定
 
-#### 为什么这样做
+#### 当前异步导出流程
 
-这不是偷懒，而是为了先把以下链路打通：
-
-1. 前端导出参数面板
-2. 导出任务创建
-3. 导出结果查询
-4. 下载 URL
-5. 后续替换成真正渲染器时不需要改前端协议
+1. 前端导出当前画布 PNG 封面
+2. 前端上传封面到后端资产系统
+3. 前端创建导出任务
+4. 后端导出任务队列处理：
+   - `svg`：真实 SVG
+   - `pdf`：真实 PDF
+   - `gif / mp4`：调用 ffmpeg 生成媒体文件
+5. 前端轮询任务状态
+6. 完成后通过认证请求下载二进制结果
 
 当前导出任务字段：
 
@@ -454,7 +455,7 @@ X-Workspace-Key: wk_xxxxxxxxxxxxx
 {
   "exportJobId": "exp_01...",
   "format": "svg",
-  "status": "completed",
+  "status": "queued | processing | completed | failed",
   "contentType": "image/svg+xml; charset=utf-8",
   "downloadName": "triangle-demo.svg"
 }
@@ -662,7 +663,71 @@ X-Workspace-Key: wk_xxxxxxxxxxxxx
 
 ---
 
-## 8. 推荐的下一阶段任务拆分
+## 8. 团队空间与审阅评论
+
+### 8.1 当前代码实现
+
+当前仓库已经补上团队与审阅的基础数据模型和前后端接口：
+
+#### 团队空间
+
+- `GET /api/v1/teams`
+- `POST /api/v1/teams`
+- `GET /api/v1/teams/{teamId}/members`
+- `POST /api/v1/teams/{teamId}/members`
+
+#### 数据模型
+
+- `teams`
+- `team_memberships`
+- `projects.teamId`
+
+#### 角色模型
+
+- `owner`
+- `admin`
+- `editor`
+- `reviewer`
+- `viewer`
+
+#### 权限约束
+
+- 创建团队成员：
+  - 需要 `admin` 及以上
+- 绑定项目到团队：
+  - 需要 `editor` 及以上
+- 评论团队项目：
+  - 需要 `reviewer` 及以上
+- 查看团队项目：
+  - 需要 `viewer` 及以上
+
+### 8.2 审阅与评论
+
+#### 接口
+
+- `GET /api/v1/review-comments?projectId=...`
+- `POST /api/v1/review-comments`
+- `PATCH /api/v1/review-comments/{commentId}`
+
+#### 绑定规则
+
+评论必须绑定到以下其一：
+
+- `versionId`
+- `objectName`
+
+这保证评论不会变成漂浮文本。
+
+#### 当前前端行为
+
+- 用户可对当前项目提交评论
+- 可选绑定到当前对象
+- 评论写入后会立即刷新列表
+- 可将评论标记为 `resolved`
+
+---
+
+## 9. 推荐的下一阶段任务拆分
 
 ### Milestone A
 
@@ -684,7 +749,7 @@ X-Workspace-Key: wk_xxxxxxxxxxxxx
 
 ---
 
-## 9. 与当前代码的对应关系
+## 10. 与当前代码的对应关系
 
 - 前端主入口：
   - `src/components/App.jsx`

@@ -24,6 +24,7 @@ const BackendPanel = ({
   onFileChange,
   onGenerate,
   onPublish,
+  onRequireAuth,
   latestJobResult,
   latestShare,
   activeShareSlug,
@@ -100,6 +101,16 @@ const BackendPanel = ({
             >
               {isPublishing ? '发布中...' : '发布当前分享'}
             </button>
+
+            {!isAuthenticated && (
+              <button
+                type="button"
+                className="backend-btn backend-btn-secondary"
+                onClick={onRequireAuth}
+              >
+                前往登录
+              </button>
+            )}
           </div>
 
           <p className="backend-auth-hint">

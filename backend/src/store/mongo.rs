@@ -11,7 +11,8 @@ use crate::error::AppError;
 use crate::metrics::MetricsRegistry;
 use crate::types::{
     AssetRecord, DrawingJobRecord, ExportJobRecord, ProjectRecord, ProjectVersionRecord,
-    SessionRecord, ShareRecord, UploadedAsset, UserRecord,
+    ReviewCommentRecord, SessionRecord, ShareRecord, TeamMembershipRecord, TeamRecord,
+    UploadedAsset, UserRecord,
 };
 
 #[derive(Clone)]
@@ -23,6 +24,9 @@ pub struct MongoStore {
     projects: Collection<Document>,
     project_versions: Collection<Document>,
     export_jobs: Collection<Document>,
+    teams: Collection<Document>,
+    team_memberships: Collection<Document>,
+    review_comments: Collection<Document>,
     users: Collection<Document>,
     sessions: Collection<Document>,
     metrics: Arc<MetricsRegistry>,
@@ -53,6 +57,9 @@ impl MongoStore {
             projects: database.collection("projects"),
             project_versions: database.collection("project_versions"),
             export_jobs: database.collection("export_jobs"),
+            teams: database.collection("teams"),
+            team_memberships: database.collection("team_memberships"),
+            review_comments: database.collection("review_comments"),
             users: database.collection("users"),
             sessions: database.collection("sessions"),
             metrics,
@@ -207,6 +214,19 @@ impl MongoStore {
         .await
     }
 
+    pub async fn find_projects_by_team(
+        &self,
+        team_id: &str,
+    ) -> Result<Vec<ProjectRecord>, AppError> {
+        self.find_many_records(
+            "find_projects_by_team",
+            &self.projects,
+            doc! { "teamId": team_id },
+            Some(doc! { "updatedAt": -1 }),
+        )
+        .await
+    }
+
     pub async fn upsert_project_version(
         &self,
         record: &ProjectVersionRecord,
@@ -252,6 +272,112 @@ impl MongoStore {
             &self.export_jobs,
             doc! { "_id": export_job_id },
             None,
+        )
+        .await
+    }
+
+    pub async fn upsert_team(&self, record: &TeamRecord) -> Result<(), AppError> {
+        self.upsert_record("upsert_team", &self.teams, &record.team_id, record)
+            .await
+    }
+
+    pub async fn find_team(&self, team_id: &str) -> Result<Option<TeamRecord>, AppError> {
+        self.find_one_record("find_team", &self.teams, doc! { "_id": team_id }, None)
+            .await
+    }
+
+    pub async fn find_teams_by_user(&self, user_id: &str) -> Result<Vec<TeamRecord>, AppError> {
+        let memberships = self
+            .find_team_memberships_by_user(user_id)
+            .await?
+            .into_iter()
+            .map(|membership| membership.team_id)
+            .collect::<Vec<_>>();
+        let mut teams = Vec::new();
+
+        for team_id in memberships {
+            if let Some(team) = self.find_team(&team_id).await? {
+                teams.push(team);
+            }
+        }
+
+        Ok(teams)
+    }
+
+    pub async fn upsert_team_membership(
+        &self,
+        record: &TeamMembershipRecord,
+    ) -> Result<(), AppError> {
+        self.upsert_record(
+            "upsert_team_membership",
+            &self.team_memberships,
+            &record.membership_id,
+            record,
+        )
+        .await
+    }
+
+    pub async fn find_team_memberships_by_team(
+        &self,
+        team_id: &str,
+    ) -> Result<Vec<TeamMembershipRecord>, AppError> {
+        self.find_many_records(
+            "find_team_memberships_by_team",
+            &self.team_memberships,
+            doc! { "teamId": team_id },
+            None,
+        )
+        .await
+    }
+
+    pub async fn find_team_memberships_by_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<TeamMembershipRecord>, AppError> {
+        self.find_many_records(
+            "find_team_memberships_by_user",
+            &self.team_memberships,
+            doc! { "userId": user_id },
+            None,
+        )
+        .await
+    }
+
+    pub async fn upsert_review_comment(
+        &self,
+        record: &ReviewCommentRecord,
+    ) -> Result<(), AppError> {
+        self.upsert_record(
+            "upsert_review_comment",
+            &self.review_comments,
+            &record.comment_id,
+            record,
+        )
+        .await
+    }
+
+    pub async fn find_review_comment(
+        &self,
+        comment_id: &str,
+    ) -> Result<Option<ReviewCommentRecord>, AppError> {
+        self.find_one_record(
+            "find_review_comment",
+            &self.review_comments,
+            doc! { "_id": comment_id },
+            None,
+        )
+        .await
+    }
+
+    pub async fn find_review_comments_by_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ReviewCommentRecord>, AppError> {
+        self.find_many_records(
+            "find_review_comments_by_project",
+            &self.review_comments,
+            doc! { "projectId": project_id },
+            Some(doc! { "updatedAt": -1 }),
         )
         .await
     }
@@ -358,10 +484,45 @@ impl MongoStore {
         )
         .await?;
         self.create_index(
+            "create_index_projects_team",
+            &self.projects,
+            doc! { "teamId": 1, "updatedAt": -1 },
+            "projects_team_updated",
+        )
+        .await?;
+        self.create_index(
             "create_index_project_versions_project",
             &self.project_versions,
             doc! { "projectId": 1, "createdAt": -1 },
             "project_versions_project_created",
+        )
+        .await?;
+        self.create_unique_index(
+            "create_index_teams_slug",
+            &self.teams,
+            doc! { "slug": 1 },
+            "teams_slug_unique",
+        )
+        .await?;
+        self.create_index(
+            "create_index_team_memberships_team",
+            &self.team_memberships,
+            doc! { "teamId": 1 },
+            "team_memberships_team",
+        )
+        .await?;
+        self.create_index(
+            "create_index_team_memberships_user",
+            &self.team_memberships,
+            doc! { "userId": 1 },
+            "team_memberships_user",
+        )
+        .await?;
+        self.create_index(
+            "create_index_review_comments_project",
+            &self.review_comments,
+            doc! { "projectId": 1, "updatedAt": -1 },
+            "review_comments_project_updated",
         )
         .await?;
         self.create_unique_index(

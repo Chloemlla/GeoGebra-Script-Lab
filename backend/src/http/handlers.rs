@@ -1,3 +1,4 @@
+use base64::Engine;
 use bytes::Bytes;
 use chrono::Utc;
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
@@ -26,18 +27,23 @@ use crate::state::AppState;
 use crate::store::{
     cache_asset_payload, find_any_job_record, find_asset_payload, find_asset_record,
     find_export_job_record, find_job_record, find_project_record, find_project_versions_by_project,
-    find_share_by_slug, find_user_by_email, find_user_by_username, list_projects_by_user,
-    list_projects_by_workspace, revoke_session_by_token, upsert_asset_record,
-    upsert_export_job_record, upsert_job_record, upsert_project_record,
-    upsert_project_version_record, upsert_session_record, upsert_share_record, upsert_user_record,
+    find_review_comment_record, find_share_by_slug, find_team_record, find_user_by_email,
+    find_user_by_id, find_user_by_username, list_projects_by_team, list_projects_by_user,
+    list_projects_by_workspace, list_review_comments_by_project, list_team_memberships_by_team,
+    list_teams_by_user, revoke_session_by_token, upsert_asset_record, upsert_export_job_record,
+    upsert_job_record, upsert_project_record, upsert_project_version_record,
+    upsert_review_comment_record, upsert_session_record, upsert_share_record,
+    upsert_team_membership_record, upsert_team_record, upsert_user_record,
 };
 use crate::types::{
     AnnotationJobRequest, Diagnostics, DrawingJobCreateRequest, DrawingJobRecord,
     DrawingJobResultResponse, ExportJobCreateRequest, ExportJobRecord, ExportJobStatus, JobStatus,
     LoginRequest, ModelConfigUpdateRequest, ObjectExplanationRequest, ProjectCreateRequest,
     ProjectRecord, ProjectUpdateRequest, ProjectVersionCreateRequest, ProjectVersionRecord,
-    ProjectVersionSummary, RegisterRequest, RenderHints, ScriptInsightsRequest, ShareCreateRequest,
-    ShareRecord, UploadCreateRequest, UploadedAsset, UserRecord, Viewport,
+    ProjectVersionSummary, RegisterRequest, RenderHints, ReviewCommentCreateRequest,
+    ReviewCommentRecord, ReviewCommentUpdateRequest, ScriptInsightsRequest, ShareCreateRequest,
+    ShareRecord, TeamCreateRequest, TeamMemberCreateRequest, TeamMembershipRecord, TeamRecord,
+    TeamRole, UploadCreateRequest, UploadedAsset, UserRecord, Viewport,
 };
 use crate::utils::{fallback_commands, request_id, short_id, short_id_suffix, slugify};
 
@@ -80,6 +86,12 @@ pub async fn route_request(
     let is_project_versions_post = method == Method::POST
         && path.starts_with("/api/v1/projects/")
         && path.ends_with("/versions");
+    let is_team_members_get =
+        method == Method::GET && path.starts_with("/api/v1/teams/") && path.ends_with("/members");
+    let is_team_members_post =
+        method == Method::POST && path.starts_with("/api/v1/teams/") && path.ends_with("/members");
+    let is_review_comment_patch =
+        method == Method::PATCH && path.starts_with("/api/v1/review-comments/");
     let is_export_get = method == Method::GET
         && path.starts_with("/api/v1/exports/")
         && !path.ends_with("/download");
@@ -146,6 +158,10 @@ pub async fn route_request(
         (Method::PUT, "/api/v1/model/config") => update_model_config(request, state).await,
         (Method::GET, "/api/v1/projects") => list_projects(request, state).await,
         (Method::POST, "/api/v1/projects") => create_project(request, state).await,
+        (Method::GET, "/api/v1/teams") => list_teams(request, state).await,
+        (Method::POST, "/api/v1/teams") => create_team(request, state).await,
+        (Method::GET, "/api/v1/review-comments") => list_review_comments(request, state).await,
+        (Method::POST, "/api/v1/review-comments") => create_review_comment(request, state).await,
         (Method::POST, "/api/v1/assets/uploads") => create_upload(request, state).await,
         (Method::POST, "/api/v1/ai/drawing-jobs") => create_drawing_job(request, state).await,
         (Method::POST, "/api/v1/ai/script-insights") => {
@@ -163,6 +179,9 @@ pub async fn route_request(
         _ if is_share_get => get_share(path, state).await,
         _ if is_project_versions_get => list_project_versions(path, request, state).await,
         _ if is_project_versions_post => create_project_version(path, request, state).await,
+        _ if is_team_members_get => list_team_members(path, request, state).await,
+        _ if is_team_members_post => create_team_member(path, request, state).await,
+        _ if is_review_comment_patch => update_review_comment(path, request, state).await,
         _ if is_project_get => get_project(path, request, state).await,
         _ if is_project_patch => update_project(path, request, state).await,
         _ if is_drawing_job_get => get_drawing_job(path, request, state).await,
@@ -382,6 +401,12 @@ async fn list_projects(
         projects_by_id.insert(project.project_id.clone(), project);
     }
 
+    for team in list_teams_by_user(&auth.user.user_id, &state).await? {
+        for project in list_projects_by_team(&team.team_id, &state).await? {
+            projects_by_id.insert(project.project_id.clone(), project);
+        }
+    }
+
     let mut projects = projects_by_id.into_values().collect::<Vec<_>>();
     projects.retain(|project| project.deleted_at.is_none());
 
@@ -417,6 +442,13 @@ async fn create_project(
     let body = read_json(request).await?;
     let payload: ProjectCreateRequest = serde_json::from_value(body)
         .map_err(|err| AppError::BadRequest(format!("invalid project body: {err}")))?;
+    if let Some(team_id) = normalize_team_id(payload.team_id.clone()) {
+        let team = find_team_record(&team_id, &state)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let memberships = list_team_memberships_by_team(&team_id, &state).await?;
+        ensure_team_access(&team, &memberships, &auth.user.user_id, TeamRole::Editor)?;
+    }
 
     let now = Utc::now();
     let project = ProjectRecord {
@@ -430,6 +462,7 @@ async fn create_project(
         folder: normalize_folder(&payload.folder),
         tags: normalize_tags(payload.tags),
         is_favorite: payload.is_favorite,
+        team_id: normalize_team_id(payload.team_id),
         canvas_mode: normalize_canvas_mode(&payload.canvas_mode),
         latest_code: payload.code,
         latest_version_id: None,
@@ -465,14 +498,14 @@ async fn get_project(
     let mut project = find_project_record(project_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_actor_owns_resource(
-        &project.owner_user_id,
+    ensure_project_access(
+        &mut project,
         &auth.user.user_id,
-        &project.owner_workspace_key,
         &workspace_key,
-        "project",
-    )?;
-    claim_project_owner_if_needed(&mut project, &auth.user.user_id, &workspace_key, &state).await?;
+        TeamRole::Viewer,
+        &state,
+    )
+    .await?;
 
     Ok(json_response(
         StatusCode::OK,
@@ -501,14 +534,21 @@ async fn update_project(
     let mut project = find_project_record(project_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_actor_owns_resource(
-        &project.owner_user_id,
+    ensure_project_access(
+        &mut project,
         &auth.user.user_id,
-        &project.owner_workspace_key,
         &workspace_key,
-        "project",
-    )?;
-    claim_project_owner_if_needed(&mut project, &auth.user.user_id, &workspace_key, &state).await?;
+        TeamRole::Editor,
+        &state,
+    )
+    .await?;
+    if let Some(team_id) = normalize_team_id(payload.team_id.clone()) {
+        let team = find_team_record(&team_id, &state)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let memberships = list_team_memberships_by_team(&team_id, &state).await?;
+        ensure_team_access(&team, &memberships, &auth.user.user_id, TeamRole::Editor)?;
+    }
 
     if let Some(title) = payload.title {
         project.title = normalize_title(&title);
@@ -521,6 +561,9 @@ async fn update_project(
     }
     if let Some(is_favorite) = payload.is_favorite {
         project.is_favorite = is_favorite;
+    }
+    if payload.team_id.is_some() {
+        project.team_id = normalize_team_id(payload.team_id);
     }
     if let Some(canvas_mode) = payload.canvas_mode {
         project.canvas_mode = normalize_canvas_mode(&canvas_mode);
@@ -562,14 +605,14 @@ async fn list_project_versions(
     let mut project = find_project_record(project_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_actor_owns_resource(
-        &project.owner_user_id,
+    ensure_project_access(
+        &mut project,
         &auth.user.user_id,
-        &project.owner_workspace_key,
         &workspace_key,
-        "project",
-    )?;
-    claim_project_owner_if_needed(&mut project, &auth.user.user_id, &workspace_key, &state).await?;
+        TeamRole::Viewer,
+        &state,
+    )
+    .await?;
     let mut versions = find_project_versions_by_project(project_id, &state).await?;
     versions.sort_by(|left, right| right.created_at.cmp(&left.created_at));
 
@@ -600,14 +643,14 @@ async fn create_project_version(
     let mut project = find_project_record(project_id, &state)
         .await?
         .ok_or(AppError::NotFound)?;
-    ensure_actor_owns_resource(
-        &project.owner_user_id,
+    ensure_project_access(
+        &mut project,
         &auth.user.user_id,
-        &project.owner_workspace_key,
         &workspace_key,
-        "project",
-    )?;
-    claim_project_owner_if_needed(&mut project, &auth.user.user_id, &workspace_key, &state).await?;
+        TeamRole::Editor,
+        &state,
+    )
+    .await?;
 
     let version = ProjectVersionRecord {
         version_id: payload
@@ -650,6 +693,272 @@ async fn create_project_version(
             "project version created",
             request_id(),
             Some(json!(version)),
+            None,
+        ),
+    ))
+}
+
+async fn list_teams(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
+    let teams = list_teams_by_user(&auth.user.user_id, &state).await?;
+
+    Ok(json_response(
+        StatusCode::OK,
+        envelope(
+            true,
+            "TEAMS_LISTED",
+            "teams listed",
+            request_id(),
+            Some(json!(teams)),
+            None,
+        ),
+    ))
+}
+
+async fn create_team(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
+    let body = read_json(request).await?;
+    let payload: TeamCreateRequest = serde_json::from_value(body)
+        .map_err(|err| AppError::BadRequest(format!("invalid team body: {err}")))?;
+    let now = Utc::now();
+    let team = TeamRecord {
+        team_id: format!("team_{}", short_id()),
+        owner_user_id: auth.user.user_id.clone(),
+        slug: format!("{}-{}", slugify(&payload.name), short_id_suffix()),
+        name: normalize_title(&payload.name),
+        description: payload.description.unwrap_or_default(),
+        created_at: now,
+        updated_at: now,
+    };
+    let owner_membership = TeamMembershipRecord {
+        membership_id: format!("tm_{}", short_id()),
+        team_id: team.team_id.clone(),
+        user_id: auth.user.user_id.clone(),
+        role: TeamRole::Owner,
+        created_at: now,
+    };
+
+    upsert_team_record(&state, &team).await?;
+    upsert_team_membership_record(&state, &owner_membership).await?;
+
+    Ok(json_response(
+        StatusCode::CREATED,
+        envelope(
+            true,
+            "TEAM_CREATED",
+            "team created",
+            request_id(),
+            Some(json!({
+                "team": team,
+                "membership": owner_membership,
+            })),
+            None,
+        ),
+    ))
+}
+
+async fn list_team_members(
+    path: String,
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
+    let team_id = extract_team_id_from_members_path(&path)?;
+    let team = find_team_record(team_id, &state)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let memberships = list_team_memberships_by_team(team_id, &state).await?;
+    ensure_team_access(&team, &memberships, &auth.user.user_id, TeamRole::Viewer)?;
+
+    Ok(json_response(
+        StatusCode::OK,
+        envelope(
+            true,
+            "TEAM_MEMBERS_LISTED",
+            "team members listed",
+            request_id(),
+            Some(json!(memberships)),
+            None,
+        ),
+    ))
+}
+
+async fn create_team_member(
+    path: String,
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
+    let team_id = extract_team_id_from_members_path(&path)?;
+    let body = read_json(request).await?;
+    let payload: TeamMemberCreateRequest = serde_json::from_value(body)
+        .map_err(|err| AppError::BadRequest(format!("invalid team member body: {err}")))?;
+    let team = find_team_record(team_id, &state)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let memberships = list_team_memberships_by_team(team_id, &state).await?;
+    ensure_team_access(&team, &memberships, &auth.user.user_id, TeamRole::Admin)?;
+    if find_user_by_id(&payload.user_id, &state).await?.is_none() {
+        return Err(AppError::BadRequest(
+            "target user does not exist".to_string(),
+        ));
+    }
+
+    let membership = TeamMembershipRecord {
+        membership_id: format!("tm_{}", short_id()),
+        team_id: team_id.to_string(),
+        user_id: payload.user_id,
+        role: payload.role,
+        created_at: Utc::now(),
+    };
+    upsert_team_membership_record(&state, &membership).await?;
+
+    Ok(json_response(
+        StatusCode::CREATED,
+        envelope(
+            true,
+            "TEAM_MEMBER_CREATED",
+            "team member created",
+            request_id(),
+            Some(json!(membership)),
+            None,
+        ),
+    ))
+}
+
+async fn list_review_comments(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
+    let query = request.uri().query().unwrap_or_default();
+    let params = url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .collect::<std::collections::HashMap<String, String>>();
+    let project_id = params
+        .get("projectId")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| AppError::BadRequest("projectId is required".to_string()))?;
+    let project = find_project_record(project_id, &state)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    ensure_project_comment_access(&project, &auth.user.user_id, &state).await?;
+    let mut comments = list_review_comments_by_project(project_id, &state).await?;
+
+    if let Some(version_id) = params.get("versionId") {
+        comments.retain(|comment| comment.version_id.as_deref() == Some(version_id.as_str()));
+    }
+    if let Some(object_name) = params.get("objectName") {
+        comments.retain(|comment| comment.object_name.as_deref() == Some(object_name.as_str()));
+    }
+    comments.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+
+    Ok(json_response(
+        StatusCode::OK,
+        envelope(
+            true,
+            "REVIEW_COMMENTS_LISTED",
+            "review comments listed",
+            request_id(),
+            Some(json!(comments)),
+            None,
+        ),
+    ))
+}
+
+async fn create_review_comment(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
+    let body = read_json(request).await?;
+    let payload: ReviewCommentCreateRequest = serde_json::from_value(body)
+        .map_err(|err| AppError::BadRequest(format!("invalid review comment body: {err}")))?;
+    if payload.body.trim().is_empty() {
+        return Err(AppError::BadRequest("comment body is required".to_string()));
+    }
+    if payload.version_id.is_none() && payload.object_name.is_none() {
+        return Err(AppError::BadRequest(
+            "comment must bind to a project version or object".to_string(),
+        ));
+    }
+
+    let project = find_project_record(&payload.project_id, &state)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    ensure_project_comment_access(&project, &auth.user.user_id, &state).await?;
+
+    let comment = ReviewCommentRecord {
+        comment_id: format!("cmt_{}", short_id()),
+        team_id: project.team_id.clone().or(payload.team_id),
+        project_id: payload.project_id,
+        version_id: payload.version_id,
+        object_name: payload.object_name,
+        author_user_id: auth.user.user_id.clone(),
+        status: "open".to_string(),
+        body: payload.body,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    upsert_review_comment_record(&state, &comment).await?;
+
+    Ok(json_response(
+        StatusCode::CREATED,
+        envelope(
+            true,
+            "REVIEW_COMMENT_CREATED",
+            "review comment created",
+            request_id(),
+            Some(json!(comment)),
+            None,
+        ),
+    ))
+}
+
+async fn update_review_comment(
+    path: String,
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let auth = require_auth(request.headers(), &state).await?;
+    let comment_id = path.trim_start_matches("/api/v1/review-comments/");
+    let body = read_json(request).await?;
+    let payload: ReviewCommentUpdateRequest = serde_json::from_value(body).map_err(|err| {
+        AppError::BadRequest(format!("invalid review comment update body: {err}"))
+    })?;
+    let mut comment = find_review_comment_record(comment_id, &state)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let project = find_project_record(&comment.project_id, &state)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    ensure_project_comment_access(&project, &auth.user.user_id, &state).await?;
+
+    if let Some(body) = payload.body {
+        if !body.trim().is_empty() {
+            comment.body = body;
+        }
+    }
+    if let Some(status) = payload.status {
+        comment.status = status;
+    }
+    comment.updated_at = Utc::now();
+    upsert_review_comment_record(&state, &comment).await?;
+
+    Ok(json_response(
+        StatusCode::OK,
+        envelope(
+            true,
+            "REVIEW_COMMENT_UPDATED",
+            "review comment updated",
+            request_id(),
+            Some(json!(comment)),
             None,
         ),
     ))
@@ -754,8 +1063,19 @@ async fn create_export_job(
     }
 
     let now = Utc::now();
+    let export_request = payload.clone();
     let export_job = build_export_job_record(&auth.user.user_id, &workspace_key, payload, now)?;
     upsert_export_job_record(&state, &export_job).await?;
+    if let Err(error) = state
+        .export_task_dispatcher
+        .enqueue(export_job.export_job_id.clone(), export_request)
+    {
+        let mut failed_job = export_job.clone();
+        failed_job.status = ExportJobStatus::Failed;
+        failed_job.error_message = Some(error.to_string());
+        upsert_export_job_record(&state, &failed_job).await?;
+        return Err(error);
+    }
 
     Ok(json_response(
         StatusCode::CREATED,
@@ -827,11 +1147,22 @@ async fn download_export_job(
     claim_export_job_owner_if_needed(&mut export_job, &auth.user.user_id, &workspace_key, &state)
         .await?;
 
-    let mut response = bytes_response(
-        StatusCode::OK,
-        Bytes::copy_from_slice(export_job.asset_text.as_bytes()),
-        &export_job.content_type,
-    );
+    if export_job.status != ExportJobStatus::Completed {
+        return Err(AppError::Conflict(
+            "export job is not completed yet".to_string(),
+        ));
+    }
+    let bytes = export_job
+        .asset_base64
+        .as_deref()
+        .ok_or_else(|| AppError::Conflict("export artifact is not ready".to_string()))
+        .and_then(|value| {
+            base64::engine::general_purpose::STANDARD
+                .decode(value)
+                .map_err(|err| AppError::Internal(format!("invalid export artifact: {err}")))
+        })?;
+
+    let mut response = bytes_response(StatusCode::OK, Bytes::from(bytes), &export_job.content_type);
     if let Ok(value) = HeaderValue::from_str(&format!(
         "attachment; filename=\"{}\"",
         export_job.download_name
@@ -1330,6 +1661,21 @@ fn extract_project_id_from_versions_path(path: &str) -> Result<&str, AppError> {
         .ok_or_else(|| AppError::BadRequest("project id is required".to_string()))
 }
 
+fn extract_team_id_from_members_path(path: &str) -> Result<&str, AppError> {
+    path.trim_start_matches("/api/v1/teams/")
+        .trim_end_matches("/members")
+        .strip_suffix('/')
+        .or_else(|| {
+            Some(
+                path.trim_start_matches("/api/v1/teams/")
+                    .trim_end_matches("/members"),
+            )
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::BadRequest("team id is required".to_string()))
+}
+
 fn normalize_title(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1358,6 +1704,12 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
     }
 
     normalized
+}
+
+fn normalize_team_id(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != "__none__")
 }
 
 fn normalize_canvas_mode(value: &str) -> String {
@@ -1399,6 +1751,91 @@ fn build_version_summary(previous_code: &str, next_code: &str) -> ProjectVersion
     }
 }
 
+fn role_rank(role: &TeamRole) -> u8 {
+    match role {
+        TeamRole::Owner => 5,
+        TeamRole::Admin => 4,
+        TeamRole::Editor => 3,
+        TeamRole::Reviewer => 2,
+        TeamRole::Viewer => 1,
+    }
+}
+
+fn has_required_role(current: &TeamRole, required: &TeamRole) -> bool {
+    role_rank(current) >= role_rank(required)
+}
+
+fn ensure_team_access(
+    team: &TeamRecord,
+    memberships: &[TeamMembershipRecord],
+    current_user_id: &str,
+    required_role: TeamRole,
+) -> Result<(), AppError> {
+    if team.owner_user_id == current_user_id {
+        return Ok(());
+    }
+
+    let membership = memberships
+        .iter()
+        .find(|membership| membership.user_id == current_user_id)
+        .ok_or_else(|| AppError::Unauthorized("you are not a member of this team".to_string()))?;
+
+    if !has_required_role(&membership.role, &required_role) {
+        return Err(AppError::Unauthorized(
+            "your team role does not allow this operation".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+async fn ensure_project_comment_access(
+    project: &ProjectRecord,
+    current_user_id: &str,
+    state: &AppState,
+) -> Result<(), AppError> {
+    if project.owner_user_id == current_user_id {
+        return Ok(());
+    }
+
+    if let Some(team_id) = &project.team_id {
+        let team = find_team_record(team_id, state)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let memberships = list_team_memberships_by_team(team_id, state).await?;
+        return ensure_team_access(&team, &memberships, current_user_id, TeamRole::Reviewer);
+    }
+
+    Err(AppError::Unauthorized(
+        "you do not have access to this project comments".to_string(),
+    ))
+}
+
+async fn ensure_project_access(
+    project: &mut ProjectRecord,
+    current_user_id: &str,
+    current_workspace_key: &str,
+    required_role: TeamRole,
+    state: &AppState,
+) -> Result<(), AppError> {
+    if let Some(team_id) = &project.team_id {
+        let team = find_team_record(team_id, state)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let memberships = list_team_memberships_by_team(team_id, state).await?;
+        return ensure_team_access(&team, &memberships, current_user_id, required_role);
+    }
+
+    ensure_actor_owns_resource(
+        &project.owner_user_id,
+        current_user_id,
+        &project.owner_workspace_key,
+        current_workspace_key,
+        "project",
+    )?;
+    claim_project_owner_if_needed(project, current_user_id, current_workspace_key, state).await
+}
+
 fn build_export_job_record(
     user_id: &str,
     workspace_key: &str,
@@ -1416,43 +1853,23 @@ fn build_export_job_record(
         .map(normalize_title)
         .unwrap_or_else(|| "GeoGebra Export".to_string());
     let export_job_id = format!("exp_{}", short_id());
-    let commands_text = payload.commands.join("\n");
-    let options = payload.options.unwrap_or_else(|| json!({}));
-
-    let (content_type, extension, asset_text): (String, String, String) = match format.as_str() {
+    let (content_type, extension): (String, String) = match format.as_str() {
         "svg" => (
             "image/svg+xml; charset=utf-8".to_string(),
             "svg".to_string(),
-            build_svg_export(&title, &payload.canvas_mode, &payload.commands),
         ),
-        "pdf" => (
-            "text/plain; charset=utf-8".to_string(),
-            "pdf.txt".to_string(),
-            format!(
-                "PDF export spec\nTitle: {title}\nCanvas: {}\nOptions: {}\n\n{}",
-                payload.canvas_mode,
-                options,
-                commands_text
-            ),
+        "pdf" => ("application/pdf".to_string(), "pdf".to_string()),
+        "gif" => ("image/gif".to_string(), "gif".to_string()),
+        "mp4" => ("video/mp4".to_string(), "mp4".to_string()),
+        "pptx" => (
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+            "pptx.json".to_string(),
         ),
-        "gif" | "mp4" | "pptx" | "ggb" => (
+        "ggb" => (
             "application/json; charset=utf-8".to_string(),
-            format!("{format}.json"),
-            serde_json::to_string_pretty(&json!({
-                "title": title,
-                "canvasMode": payload.canvas_mode,
-                "format": format,
-                "options": options,
-                "commands": payload.commands,
-                "note": "heavy export placeholder generated by backend; replace with renderer pipeline later"
-            }))
-            .map_err(|err| AppError::Internal(format!("unable to serialize export payload: {err}")))?,
+            "ggb.json".to_string(),
         ),
-        _ => (
-            "text/plain; charset=utf-8".to_string(),
-            "txt".to_string(),
-            commands_text,
-        ),
+        _ => ("text/plain; charset=utf-8".to_string(), "txt".to_string()),
     };
 
     Ok(ExportJobRecord {
@@ -1460,53 +1877,18 @@ fn build_export_job_record(
         owner_user_id: user_id.to_string(),
         owner_workspace_key: workspace_key.to_string(),
         project_id: payload.project_id,
+        asset_id: payload.asset_id,
         title: title.clone(),
         canvas_mode: payload.canvas_mode,
         format: format.clone(),
-        status: ExportJobStatus::Completed,
+        status: ExportJobStatus::Queued,
         content_type,
         download_name: format!("{}-{}.{}", slugify(&title), short_id_suffix(), extension),
-        asset_text,
+        asset_base64: None,
+        error_message: None,
         created_at: now,
         updated_at: now,
     })
-}
-
-fn build_svg_export(title: &str, canvas_mode: &str, commands: &[String]) -> String {
-    let lines = commands
-        .iter()
-        .enumerate()
-        .map(|(index, command)| {
-            format!(
-                "<text x=\"40\" y=\"{}\" font-size=\"16\" fill=\"#1d1d1f\">{}</text>",
-                120 + index * 24,
-                escape_svg(command)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1280\" height=\"720\" viewBox=\"0 0 1280 720\">
-  <rect width=\"1280\" height=\"720\" fill=\"#f5f5f7\"/>
-  <rect x=\"32\" y=\"32\" width=\"1216\" height=\"656\" rx=\"28\" fill=\"#ffffff\" stroke=\"#d2d2d7\"/>
-  <text x=\"40\" y=\"72\" font-size=\"32\" font-family=\"Arial, sans-serif\" fill=\"#1d1d1f\">{}</text>
-  <text x=\"40\" y=\"102\" font-size=\"16\" font-family=\"Arial, sans-serif\" fill=\"#6e6e73\">Canvas: {}</text>
-  {}
-</svg>",
-        escape_svg(title),
-        escape_svg(canvas_mode),
-        lines
-    )
-}
-
-fn escape_svg(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 fn ensure_owner(

@@ -8,7 +8,8 @@ use crate::error::AppError;
 use crate::state::AppState;
 use crate::types::{
     AssetRecord, DrawingJobRecord, ExportJobRecord, ProjectRecord, ProjectVersionRecord,
-    SessionRecord, ShareRecord, UploadedAsset, UserRecord,
+    ReviewCommentRecord, SessionRecord, ShareRecord, TeamMembershipRecord, TeamRecord,
+    UploadedAsset, UserRecord,
 };
 
 const MAX_IN_MEMORY_ASSET_PAYLOAD_BYTES: usize = 512 * 1024;
@@ -229,6 +230,34 @@ pub async fn list_projects_by_user(
     Ok(memory_items)
 }
 
+pub async fn list_projects_by_team(
+    team_id: &str,
+    state: &AppState,
+) -> Result<Vec<ProjectRecord>, AppError> {
+    let memory_items = state
+        .store
+        .read()
+        .await
+        .projects
+        .values()
+        .filter(|record| record.team_id.as_deref() == Some(team_id))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let mongo_items = mongo_store.find_projects_by_team(team_id).await?;
+        let mut store = state.store.write().await;
+        for record in &mongo_items {
+            store
+                .projects
+                .insert(record.project_id.clone(), record.clone());
+        }
+        return Ok(mongo_items);
+    }
+
+    Ok(memory_items)
+}
+
 pub async fn upsert_project_record(
     state: &AppState,
     record: &ProjectRecord,
@@ -344,6 +373,235 @@ pub async fn upsert_export_job_record(
         .await
         .export_jobs
         .insert(record.export_job_id.clone(), record.clone());
+
+    Ok(())
+}
+
+pub async fn find_team_record(
+    team_id: &str,
+    state: &AppState,
+) -> Result<Option<TeamRecord>, AppError> {
+    if let Some(record) = state.store.read().await.teams.get(team_id).cloned() {
+        return Ok(Some(record));
+    }
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let record = mongo_store.find_team(team_id).await?;
+        if let Some(record) = record.clone() {
+            state
+                .store
+                .write()
+                .await
+                .teams
+                .insert(team_id.to_string(), record);
+        }
+        return Ok(record);
+    }
+
+    Ok(state.store.read().await.teams.get(team_id).cloned())
+}
+
+pub async fn list_teams_by_user(
+    user_id: &str,
+    state: &AppState,
+) -> Result<Vec<TeamRecord>, AppError> {
+    let store = state.store.read().await;
+    let team_ids = store
+        .team_memberships
+        .values()
+        .filter(|membership| membership.user_id == user_id)
+        .map(|membership| membership.team_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let memory_items = store
+        .teams
+        .values()
+        .filter(|team| team.owner_user_id == user_id || team_ids.contains(&team.team_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    drop(store);
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let mongo_items = mongo_store.find_teams_by_user(user_id).await?;
+        let mut store = state.store.write().await;
+        for record in &mongo_items {
+            store.teams.insert(record.team_id.clone(), record.clone());
+        }
+        return Ok(mongo_items);
+    }
+
+    Ok(memory_items)
+}
+
+pub async fn upsert_team_record(state: &AppState, record: &TeamRecord) -> Result<(), AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.upsert_team(record).await?;
+    }
+
+    state
+        .store
+        .write()
+        .await
+        .teams
+        .insert(record.team_id.clone(), record.clone());
+
+    Ok(())
+}
+
+pub async fn list_team_memberships_by_team(
+    team_id: &str,
+    state: &AppState,
+) -> Result<Vec<TeamMembershipRecord>, AppError> {
+    let memory_items = state
+        .store
+        .read()
+        .await
+        .team_memberships
+        .values()
+        .filter(|membership| membership.team_id == team_id)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let mongo_items = mongo_store.find_team_memberships_by_team(team_id).await?;
+        let mut store = state.store.write().await;
+        for record in &mongo_items {
+            store
+                .team_memberships
+                .insert(record.membership_id.clone(), record.clone());
+        }
+        return Ok(mongo_items);
+    }
+
+    Ok(memory_items)
+}
+
+pub async fn list_team_memberships_by_user(
+    user_id: &str,
+    state: &AppState,
+) -> Result<Vec<TeamMembershipRecord>, AppError> {
+    let memory_items = state
+        .store
+        .read()
+        .await
+        .team_memberships
+        .values()
+        .filter(|membership| membership.user_id == user_id)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let mongo_items = mongo_store.find_team_memberships_by_user(user_id).await?;
+        let mut store = state.store.write().await;
+        for record in &mongo_items {
+            store
+                .team_memberships
+                .insert(record.membership_id.clone(), record.clone());
+        }
+        return Ok(mongo_items);
+    }
+
+    Ok(memory_items)
+}
+
+pub async fn upsert_team_membership_record(
+    state: &AppState,
+    record: &TeamMembershipRecord,
+) -> Result<(), AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.upsert_team_membership(record).await?;
+    }
+
+    state
+        .store
+        .write()
+        .await
+        .team_memberships
+        .insert(record.membership_id.clone(), record.clone());
+
+    Ok(())
+}
+
+pub async fn find_review_comment_record(
+    comment_id: &str,
+    state: &AppState,
+) -> Result<Option<ReviewCommentRecord>, AppError> {
+    if let Some(record) = state
+        .store
+        .read()
+        .await
+        .review_comments
+        .get(comment_id)
+        .cloned()
+    {
+        return Ok(Some(record));
+    }
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let record = mongo_store.find_review_comment(comment_id).await?;
+        if let Some(record) = record.clone() {
+            state
+                .store
+                .write()
+                .await
+                .review_comments
+                .insert(comment_id.to_string(), record);
+        }
+        return Ok(record);
+    }
+
+    Ok(state
+        .store
+        .read()
+        .await
+        .review_comments
+        .get(comment_id)
+        .cloned())
+}
+
+pub async fn list_review_comments_by_project(
+    project_id: &str,
+    state: &AppState,
+) -> Result<Vec<ReviewCommentRecord>, AppError> {
+    let memory_items = state
+        .store
+        .read()
+        .await
+        .review_comments
+        .values()
+        .filter(|comment| comment.project_id == project_id)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let mongo_items = mongo_store
+            .find_review_comments_by_project(project_id)
+            .await?;
+        let mut store = state.store.write().await;
+        for record in &mongo_items {
+            store
+                .review_comments
+                .insert(record.comment_id.clone(), record.clone());
+        }
+        return Ok(mongo_items);
+    }
+
+    Ok(memory_items)
+}
+
+pub async fn upsert_review_comment_record(
+    state: &AppState,
+    record: &ReviewCommentRecord,
+) -> Result<(), AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store.upsert_review_comment(record).await?;
+    }
+
+    state
+        .store
+        .write()
+        .await
+        .review_comments
+        .insert(record.comment_id.clone(), record.clone());
 
     Ok(())
 }

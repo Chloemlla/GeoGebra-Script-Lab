@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::state::{AppState, ModelTaskDispatcherSnapshot};
-use crate::types::{AssetRecord, DrawingJobRecord, JobStatus, ShareRecord};
+use crate::state::{AppState, ExportTaskDispatcherSnapshot, ModelTaskDispatcherSnapshot};
+use crate::types::{AssetRecord, DrawingJobRecord, ExportJobStatus, JobStatus, ShareRecord};
 
 const RECENT_ITEMS_LIMIT: usize = 8;
 
@@ -13,6 +13,7 @@ pub struct AdminDashboardSnapshot {
     pub runtime: RuntimeOverview,
     pub model: ModelOverview,
     pub dispatcher: ModelTaskDispatcherSnapshot,
+    pub export_dispatcher: ExportTaskDispatcherSnapshot,
     pub cache: CacheOverview,
     pub metrics: crate::metrics::MetricsSnapshot,
     pub recent_jobs: Vec<RecentJobView>,
@@ -55,6 +56,9 @@ pub struct CacheOverview {
     pub completed_jobs_total: usize,
     pub failed_jobs_total: usize,
     pub shares_total: usize,
+    pub export_jobs_total: usize,
+    pub completed_exports_total: usize,
+    pub failed_exports_total: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,6 +108,7 @@ pub async fn build_admin_dashboard(state: &AppState) -> AdminDashboardSnapshot {
     let metrics = state.metrics.snapshot();
     let model_view = state.model_client.view();
     let dispatcher = state.model_task_dispatcher.snapshot();
+    let export_dispatcher = state.export_task_dispatcher.snapshot();
 
     let assets = store.assets.values().cloned().collect::<Vec<_>>();
     let jobs = store.jobs.values().cloned().collect::<Vec<_>>();
@@ -126,6 +131,17 @@ pub async fn build_admin_dashboard(state: &AppState) -> AdminDashboardSnapshot {
         .iter()
         .filter(|job| job.status == JobStatus::Failed)
         .count();
+    let export_jobs_total = store.export_jobs.len();
+    let completed_exports_total = store
+        .export_jobs
+        .values()
+        .filter(|job| job.status == ExportJobStatus::Completed)
+        .count();
+    let failed_exports_total = store
+        .export_jobs
+        .values()
+        .filter(|job| job.status == ExportJobStatus::Failed)
+        .count();
 
     AdminDashboardSnapshot {
         generated_at: Utc::now(),
@@ -147,6 +163,7 @@ pub async fn build_admin_dashboard(state: &AppState) -> AdminDashboardSnapshot {
             api_key_set: model_view.api_key_set,
         },
         dispatcher,
+        export_dispatcher,
         cache: CacheOverview {
             assets_total: assets.len(),
             uploaded_assets_total,
@@ -157,6 +174,9 @@ pub async fn build_admin_dashboard(state: &AppState) -> AdminDashboardSnapshot {
             completed_jobs_total,
             failed_jobs_total,
             shares_total: shares.len(),
+            export_jobs_total,
+            completed_exports_total,
+            failed_exports_total,
         },
         metrics,
         recent_jobs: build_recent_jobs(jobs),

@@ -204,6 +204,7 @@ pub struct ProjectCreateRequest {
     pub folder: String,
     pub tags: Vec<String>,
     pub is_favorite: bool,
+    pub team_id: Option<String>,
     pub canvas_mode: String,
     pub code: String,
     pub last_opened_at: Option<DateTime<Utc>>,
@@ -217,6 +218,7 @@ pub struct ProjectUpdateRequest {
     pub folder: Option<String>,
     pub tags: Option<Vec<String>>,
     pub is_favorite: Option<bool>,
+    pub team_id: Option<String>,
     pub canvas_mode: Option<String>,
     pub code: Option<String>,
     pub latest_version_id: Option<String>,
@@ -247,6 +249,7 @@ pub struct ProjectRecord {
     pub folder: String,
     pub tags: Vec<String>,
     pub is_favorite: bool,
+    pub team_id: Option<String>,
     pub canvas_mode: String,
     pub latest_code: String,
     pub latest_version_id: Option<String>,
@@ -277,6 +280,7 @@ pub struct ProjectVersionRecord {
 #[serde(rename_all = "camelCase")]
 pub struct ExportJobCreateRequest {
     pub project_id: Option<String>,
+    pub asset_id: Option<String>,
     pub title: Option<String>,
     pub canvas_mode: String,
     pub commands: Vec<String>,
@@ -288,6 +292,7 @@ pub struct ExportJobCreateRequest {
 #[serde(rename_all = "lowercase")]
 pub enum ExportJobStatus {
     Queued,
+    Processing,
     Completed,
     Failed,
 }
@@ -301,13 +306,93 @@ pub struct ExportJobRecord {
     #[serde(default)]
     pub owner_workspace_key: String,
     pub project_id: Option<String>,
+    pub asset_id: Option<String>,
     pub title: String,
     pub canvas_mode: String,
     pub format: String,
     pub status: ExportJobStatus,
     pub content_type: String,
     pub download_name: String,
-    pub asset_text: String,
+    pub asset_base64: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TeamRole {
+    Owner,
+    Admin,
+    Editor,
+    Reviewer,
+    Viewer,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamCreateRequest {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamMemberCreateRequest {
+    pub user_id: String,
+    pub role: TeamRole,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamRecord {
+    pub team_id: String,
+    pub owner_user_id: String,
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamMembershipRecord {
+    pub membership_id: String,
+    pub team_id: String,
+    pub user_id: String,
+    pub role: TeamRole,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCommentCreateRequest {
+    pub team_id: Option<String>,
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub object_name: Option<String>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCommentUpdateRequest {
+    pub body: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCommentRecord {
+    pub comment_id: String,
+    pub team_id: Option<String>,
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub object_name: Option<String>,
+    pub author_user_id: String,
+    pub status: String,
+    pub body: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
