@@ -2008,6 +2008,7 @@ const App = () => {
     ipThreatConfigDraft.username,
     isAdminUser,
     pushUiNotice,
+    updateIpThreatConfig,
   ]);
 
   const handleIpThreatDraftChange = useCallback((field, value) => {
