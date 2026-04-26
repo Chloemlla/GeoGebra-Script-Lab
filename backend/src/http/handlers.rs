@@ -1381,6 +1381,11 @@ async fn upload_asset(
     record_snapshot.uploaded_at = Some(uploaded_at);
 
     upsert_asset_record(&state, &record_snapshot).await?;
+    if let Some(mongo_store) = &state.mongo_store {
+        mongo_store
+            .save_asset_payload(asset_id, &persisted_content_type, &bytes)
+            .await?;
+    }
     cache_asset_payload(
         &state,
         asset_id,

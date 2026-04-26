@@ -405,21 +405,6 @@ pub async fn list_teams_by_user(
     user_id: &str,
     state: &AppState,
 ) -> Result<Vec<TeamRecord>, AppError> {
-    let store = state.store.read().await;
-    let team_ids = store
-        .team_memberships
-        .values()
-        .filter(|membership| membership.user_id == user_id)
-        .map(|membership| membership.team_id.clone())
-        .collect::<std::collections::HashSet<_>>();
-    let memory_items = store
-        .teams
-        .values()
-        .filter(|team| team.owner_user_id == user_id || team_ids.contains(&team.team_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    drop(store);
-
     if let Some(mongo_store) = &state.mongo_store {
         let mongo_items = mongo_store.find_teams_by_user(user_id).await?;
         let mut store = state.store.write().await;
@@ -428,6 +413,21 @@ pub async fn list_teams_by_user(
         }
         return Ok(mongo_items);
     }
+
+    let memberships = list_team_memberships_by_user(user_id, state).await?;
+    let team_ids = memberships
+        .into_iter()
+        .map(|membership| membership.team_id)
+        .collect::<std::collections::HashSet<_>>();
+    let memory_items = state
+        .store
+        .read()
+        .await
+        .teams
+        .values()
+        .filter(|team| team.owner_user_id == user_id || team_ids.contains(&team.team_id))
+        .cloned()
+        .collect::<Vec<_>>();
 
     Ok(memory_items)
 }

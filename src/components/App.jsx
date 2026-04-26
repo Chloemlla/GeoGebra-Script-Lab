@@ -993,6 +993,117 @@ const App = () => {
     setAvailableObjectNames(GeoGebraEngine.getAllObjectNames().sort((left, right) => left.localeCompare(right, 'zh-CN')));
   }, []);
 
+  const appendLog = useCallback((message, level = 'info') => {
+    setLogs((prev) => [
+      ...prev,
+      {
+        message,
+        level,
+        timestamp: new Date(),
+      },
+    ]);
+  }, []);
+
+  const dismissUiNotice = useCallback((noticeId) => {
+    const timer = uiNoticeTimersRef.current.get(noticeId);
+    if (timer) {
+      window.clearTimeout(timer);
+      uiNoticeTimersRef.current.delete(noticeId);
+    }
+
+    setUiNotices((prev) => prev.filter((item) => item.id !== noticeId));
+  }, []);
+
+  const pushUiNotice = useCallback((message, tone = 'info') => {
+    const normalizedMessage = typeof message === 'string' ? message.trim() : '';
+    if (!normalizedMessage) {
+      return;
+    }
+
+    const noticeId = `notice_${Date.now().toString(36)}_${uiNoticeIdRef.current++}`;
+    setUiNotices((prev) => [...prev, {
+      id: noticeId,
+      message: normalizedMessage,
+      tone,
+    }].slice(-UI_NOTICE_MAX_ITEMS));
+
+    const timer = window.setTimeout(() => {
+      dismissUiNotice(noticeId);
+    }, UI_NOTICE_DURATION_MS);
+    uiNoticeTimersRef.current.set(noticeId, timer);
+  }, [dismissUiNotice]);
+
+  const focusAuthentication = useCallback((message = '', mode = 'login') => {
+    setAuthMode(mode);
+    if (message) {
+      pushUiNotice(message, 'warning');
+    }
+
+    window.requestAnimationFrame(() => {
+      authPanelRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  }, [pushUiNotice]);
+
+  const clearAuthentication = useCallback(
+    (message, level = 'info') => {
+      clearAuthToken();
+      clearStoredAuthSession();
+      setAuthSession(null);
+      setAuthState({
+        state: 'guest',
+        message,
+      });
+      setCloudSyncState((prev) => ({
+        ...prev,
+        state: 'idle',
+        message: '登录后启用云同步与导出队列',
+        lastSyncedAt: null,
+      }));
+      setLatestExportJob(null);
+
+      if (message) {
+        appendLog(message, level);
+        pushUiNotice(
+          message,
+          level === 'error' ? 'danger' : level === 'warning' ? 'warning' : 'info'
+        );
+      }
+    },
+    [appendLog, pushUiNotice]
+  );
+
+  const handleApiAuthFailure = useCallback(
+    (error, fallbackMessage = '登录状态已过期，请重新登录') => {
+      if (error?.status !== 401) {
+        return false;
+      }
+
+      clearAuthentication(fallbackMessage, 'error');
+      focusAuthentication('', 'login');
+      return true;
+      if (error?.status !== 401) {
+        return false;
+      }
+
+      clearAuthentication(fallbackMessage, 'error');
+      focusAuthentication('', 'login');
+      return true;
+    },
+    [clearAuthentication, focusAuthentication]
+  );
+
+  const ensureAuthenticatedForAction = useCallback((message) => {
+    if (isAuthenticated) {
+      return true;
+    }
+
+    focusAuthentication(message, 'login');
+    return false;
+  }, [focusAuthentication, isAuthenticated]);
+
   const saveProjectRecord = useCallback(
     ({ versionLabel = null, trigger = 'autosave', markOpened = false } = {}) => {
       const now = new Date().toISOString();
@@ -1360,60 +1471,6 @@ const App = () => {
     driftBaselineCodeRef.current = null;
   }, []);
 
-  const appendLog = useCallback((message, level = 'info') => {
-    setLogs((prev) => [
-      ...prev,
-      {
-        message,
-        level,
-        timestamp: new Date(),
-      },
-    ]);
-  }, []);
-
-  const dismissUiNotice = useCallback((noticeId) => {
-    const timer = uiNoticeTimersRef.current.get(noticeId);
-    if (timer) {
-      window.clearTimeout(timer);
-      uiNoticeTimersRef.current.delete(noticeId);
-    }
-
-    setUiNotices((prev) => prev.filter((item) => item.id !== noticeId));
-  }, []);
-
-  const pushUiNotice = useCallback((message, tone = 'info') => {
-    const normalizedMessage = typeof message === 'string' ? message.trim() : '';
-    if (!normalizedMessage) {
-      return;
-    }
-
-    const noticeId = `notice_${Date.now().toString(36)}_${uiNoticeIdRef.current++}`;
-    setUiNotices((prev) => [...prev, {
-      id: noticeId,
-      message: normalizedMessage,
-      tone,
-    }].slice(-UI_NOTICE_MAX_ITEMS));
-
-    const timer = window.setTimeout(() => {
-      dismissUiNotice(noticeId);
-    }, UI_NOTICE_DURATION_MS);
-    uiNoticeTimersRef.current.set(noticeId, timer);
-  }, [dismissUiNotice]);
-
-  const focusAuthentication = useCallback((message = '', mode = 'login') => {
-    setAuthMode(mode);
-    if (message) {
-      pushUiNotice(message, 'warning');
-    }
-
-    window.requestAnimationFrame(() => {
-      authPanelRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    });
-  }, [pushUiNotice]);
-
   const resetAuthForm = useCallback(() => {
     setAuthForm({
       account: '',
@@ -1472,56 +1529,6 @@ const App = () => {
     },
     [appendLog, pushUiNotice, resetAuthForm]
   );
-
-  const clearAuthentication = useCallback(
-    (message, level = 'info') => {
-      clearAuthToken();
-      clearStoredAuthSession();
-      setAuthSession(null);
-      setAuthState({
-        state: 'guest',
-        message,
-      });
-      setCloudSyncState((prev) => ({
-        ...prev,
-        state: 'idle',
-        message: '登录后启用云同步与导出队列',
-        lastSyncedAt: null,
-      }));
-      setLatestExportJob(null);
-
-      if (message) {
-        appendLog(message, level);
-        pushUiNotice(
-          message,
-          level === 'error' ? 'danger' : level === 'warning' ? 'warning' : 'info'
-        );
-      }
-    },
-    [appendLog, pushUiNotice]
-  );
-
-  const handleApiAuthFailure = useCallback(
-    (error, fallbackMessage = '登录状态已失效，请重新登录') => {
-      if (error?.status !== 401) {
-        return false;
-      }
-
-      clearAuthentication(fallbackMessage, 'error');
-      focusAuthentication('', 'login');
-      return true;
-    },
-    [clearAuthentication, focusAuthentication]
-  );
-
-  const ensureAuthenticatedForAction = useCallback((message) => {
-    if (isAuthenticated) {
-      return true;
-    }
-
-    focusAuthentication(message, 'login');
-    return false;
-  }, [focusAuthentication, isAuthenticated]);
 
   const handleAuthSubmit = useCallback(async () => {
     if (isSubmittingAuth) {
