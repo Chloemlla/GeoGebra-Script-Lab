@@ -693,6 +693,52 @@ pub async fn find_user_by_username(
     Ok(None)
 }
 
+pub async fn find_first_user_record(state: &AppState) -> Result<Option<UserRecord>, AppError> {
+    let memory_first = state
+        .store
+        .read()
+        .await
+        .users
+        .values()
+        .min_by(|left, right| left.created_at.cmp(&right.created_at))
+        .cloned();
+
+    if let Some(mongo_store) = &state.mongo_store {
+        let record = mongo_store.find_first_user().await?;
+        if let Some(record) = record.clone() {
+            cache_user_record(state, &record).await;
+        }
+        return Ok(record.or(memory_first));
+    }
+
+    Ok(memory_first)
+}
+
+pub async fn count_admin_users(state: &AppState) -> Result<u64, AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        return mongo_store.count_admin_users().await;
+    }
+
+    Ok(
+        state
+            .store
+            .read()
+            .await
+            .users
+            .values()
+            .filter(|user| user.is_admin)
+            .count() as u64,
+    )
+}
+
+pub async fn count_users(state: &AppState) -> Result<u64, AppError> {
+    if let Some(mongo_store) = &state.mongo_store {
+        return mongo_store.count_users().await;
+    }
+
+    Ok(state.store.read().await.users.len() as u64)
+}
+
 pub async fn find_session_by_token(
     token: &str,
     state: &AppState,

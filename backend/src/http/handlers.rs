@@ -11,9 +11,10 @@ use std::time::Instant;
 
 use crate::admin::build_admin_dashboard;
 use crate::auth::{
-    build_auth_session_response, build_current_session_response, build_session, hash_password,
-    normalize_display_name, normalize_email, normalize_username, require_auth, validate_email,
-    validate_password, validate_username, verify_password,
+    build_auth_session_response, build_current_session_response, build_session,
+    ensure_admin_compatibility, hash_password, normalize_display_name, normalize_email,
+    normalize_username, require_auth, validate_email, validate_password, validate_username,
+    verify_password,
 };
 use crate::error::AppError;
 use crate::frontend::serve_frontend_asset;
@@ -25,7 +26,7 @@ use crate::metrics::endpoint_label;
 use crate::model::ModelClient;
 use crate::state::AppState;
 use crate::store::{
-    cache_asset_payload, find_any_job_record, find_asset_payload, find_asset_record,
+    cache_asset_payload, count_users, find_any_job_record, find_asset_payload, find_asset_record,
     find_export_job_record, find_job_record, find_project_record, find_project_versions_by_project,
     find_review_comment_record, find_share_by_slug, find_team_record, find_user_by_email,
     find_user_by_id, find_user_by_username, list_projects_by_team, list_projects_by_user,
@@ -217,21 +218,24 @@ async fn register_user(
         return Err(AppError::Conflict("username is already taken".to_string()));
     }
 
+    let is_first_registered_user = count_users(&state).await? == 0;
+
     let user = UserRecord {
         user_id: format!("user_{}", short_id()),
         email,
         username: username.clone(),
         display_name: normalize_display_name(payload.display_name.as_deref(), &username),
+        is_admin: is_first_registered_user,
         password_hash: hash_password(&payload.password)?,
         created_at: Utc::now(),
         last_login_at: Some(Utc::now()),
     };
     let session = build_session(&user.user_id);
-    let response =
-        build_auth_session_response(session.token.clone(), session.expires_at.to_owned(), &user);
-
     upsert_user_record(&state, &user).await?;
     upsert_session_record(&state, &session).await?;
+    let user = ensure_admin_compatibility(user, &state).await?;
+    let response =
+        build_auth_session_response(session.token.clone(), session.expires_at.to_owned(), &user);
 
     Ok(json_response(
         StatusCode::CREATED,
@@ -275,11 +279,11 @@ async fn login_user(
 
     user.last_login_at = Some(Utc::now());
     let session = build_session(&user.user_id);
-    let response =
-        build_auth_session_response(session.token.clone(), session.expires_at.to_owned(), &user);
-
     upsert_user_record(&state, &user).await?;
     upsert_session_record(&state, &session).await?;
+    let user = ensure_admin_compatibility(user, &state).await?;
+    let response =
+        build_auth_session_response(session.token.clone(), session.expires_at.to_owned(), &user);
 
     Ok(json_response(
         StatusCode::OK,

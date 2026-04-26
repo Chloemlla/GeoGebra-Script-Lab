@@ -10,7 +10,7 @@ import React, {
 import GeoGebraContainer from './GeoGebraContainer';
 import CodeEditor from './CodeEditor';
 import ControlPanel from './ControlPanel';
-import AuthPanel from './AuthPanel';
+import AppAuthPage from './AppAuthPage';
 import LogPanel from './LogPanel';
 import AppIcon from './AppIcon';
 import AppBackendPage from './AppBackendPage';
@@ -1064,13 +1064,17 @@ const App = () => {
       pushUiNotice(message, 'warning');
     }
 
+    navigateToPage(APP_PAGE_IDS.auth);
+
     window.requestAnimationFrame(() => {
-      authPanelRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
+      window.requestAnimationFrame(() => {
+        authPanelRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
       });
     });
-  }, [pushUiNotice]);
+  }, [navigateToPage, pushUiNotice]);
 
   const clearAuthentication = useCallback(
     (message, level = 'info') => {
@@ -3709,10 +3713,21 @@ const App = () => {
                     type="button"
                     className={`global-route-button ${currentPage.id === page.id ? 'active' : ''}`}
                     onClick={() => navigateToPage(page.id)}
+                    aria-current={currentPage.id === page.id ? 'page' : undefined}
+                    title={`${page.path} · ${page.description}`}
                   >
-                    {page.label}
+                    <span className="global-route-button-label">{page.label}</span>
+                    <code className="global-route-button-path">{page.path}</code>
                   </button>
                 ))}
+              </div>
+              <div className="global-route-guide" aria-live="polite">
+                <span className="global-route-guide-kicker">路由指引</span>
+                <div className="global-route-guide-copy">
+                  <strong>{currentPage.label}</strong>
+                  <code className="global-route-guide-path">{currentPage.path}</code>
+                  <p>{currentPage.description}</p>
+                </div>
               </div>
               <span className="nav-pill">{selectedCanvasMode.label}</span>
               <span className={`nav-pill nav-pill-${authTone}`}>{authStatusText}</span>
@@ -3742,22 +3757,23 @@ const App = () => {
           </div>
         )}
 
-        <div ref={authPanelRef}>
-          <AuthPanel
+        {currentPage.id === APP_PAGE_IDS.auth && (
+          <AppAuthPage
+            panelRef={authPanelRef}
             authState={authState}
             authMode={authMode}
             authForm={authForm}
-            validation={authValidation}
-            isSubmitting={isSubmittingAuth}
+            authValidation={authValidation}
+            isSubmittingAuth={isSubmittingAuth}
             currentUser={currentUser}
-            sessionExpiresAt={authSession?.expiresAt ?? null}
+            authSession={authSession}
             isAuthenticated={isAuthenticated}
-            onModeChange={handleAuthModeChange}
-            onFieldChange={handleAuthFieldChange}
-            onSubmit={handleAuthSubmit}
-            onLogout={handleLogout}
+            handleAuthModeChange={handleAuthModeChange}
+            handleAuthFieldChange={handleAuthFieldChange}
+            handleAuthSubmit={handleAuthSubmit}
+            handleLogout={handleLogout}
           />
-        </div>
+        )}
 
         {currentPage.id === APP_PAGE_IDS.overview && (
           <AppOverviewPage
@@ -3776,6 +3792,7 @@ const App = () => {
             starterSnippets={STARTER_SNIPPETS}
             workflowSteps={WORKFLOW_STEPS}
             overviewMetrics={overviewMetrics}
+            isCommercialPlanVisible={Boolean(currentUser?.isAdmin)}
             commercializationPriorities={COMMERCIALIZATION_PRIORITIES}
             commercializationFlow={COMMERCIALIZATION_FLOW}
           />

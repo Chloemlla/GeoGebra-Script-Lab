@@ -149,20 +149,24 @@
 
 .global-route-nav {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
   flex-wrap: wrap;
 }
 
 .global-route-button {
-  min-height: 32px;
-  padding: 0 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-height: 46px;
+  padding: 8px 14px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.06);
   color: rgba(255, 255, 255, 0.82);
-  font-size: 12px;
-  font-weight: 600;
+  text-align: left;
   cursor: pointer;
   transition:
     border-color 0.22s ease,
@@ -180,6 +184,81 @@
   background: rgba(41, 151, 255, 0.18);
   border-color: rgba(41, 151, 255, 0.32);
   color: #ffffff;
+}
+
+.global-route-button-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.global-route-button-path,
+.global-route-guide-path {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.global-route-button-path {
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.global-route-button:hover .global-route-button-path,
+.global-route-button.active .global-route-button-path {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.global-route-guide {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 100%;
+  min-height: 46px;
+  padding: 10px 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.global-route-guide-kicker {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(41, 151, 255, 0.16);
+  color: #8bcbff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.global-route-guide-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.global-route-guide-copy strong {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.global-route-guide-path {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.global-route-guide-copy p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .open-source-pill {

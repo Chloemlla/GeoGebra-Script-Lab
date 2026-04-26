@@ -1,4 +1,5 @@
 export const APP_PAGE_IDS = Object.freeze({
+  auth: 'auth',
   overview: 'overview',
   studio: 'studio',
   backend: 'backend',
@@ -6,19 +7,28 @@ export const APP_PAGE_IDS = Object.freeze({
 
 export const APP_PAGES = Object.freeze([
   {
+    id: APP_PAGE_IDS.auth,
+    label: '账号',
+    path: '/auth',
+    description: '登录、注册与当前会话管理',
+  },
+  {
     id: APP_PAGE_IDS.overview,
     label: '概览',
     path: '/',
+    description: '查看产品概览、入门示例与使用入口',
   },
   {
     id: APP_PAGE_IDS.studio,
     label: '工作台',
     path: '/studio',
+    description: '编写脚本、运行画布并同步拖拽结果',
   },
   {
     id: APP_PAGE_IDS.backend,
     label: '后端',
     path: '/backend',
+    description: '调用后端能力、AI 生成与管理控制台',
   },
 ]);
 

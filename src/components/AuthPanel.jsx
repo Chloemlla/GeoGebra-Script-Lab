@@ -309,16 +309,6 @@ const AuthPanel = ({
             </>
           )}
         </article>
-
-        <article className="auth-card auth-side-card">
-          <span className="auth-card-label">Session Rules</span>
-          <ul className="auth-checklist">
-            <li>注册成功后会立即签发登录态，无需再次登录。</li>
-            <li>前端自动把 token 附加到上传、生成、分享、云同步和导出请求。</li>
-            <li>如果会话失效，受保护操作会提示重新登录。</li>
-            <li>未登录时仍可本地编辑，但云同步与后端队列会保持锁定。</li>
-          </ul>
-        </article>
       </div>
     </section>
   );

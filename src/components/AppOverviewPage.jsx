@@ -16,6 +16,7 @@ const AppOverviewPage = ({
   starterSnippets,
   workflowSteps,
   overviewMetrics,
+  isCommercialPlanVisible,
   commercializationPriorities,
   commercializationFlow,
 }) => (
@@ -154,6 +155,7 @@ const AppOverviewPage = ({
       </div>
     </section>
 
+    {isCommercialPlanVisible && (
     <section className="chapter chapter-light strategy-section">
       <div className="chapter-header">
         <div>
@@ -211,6 +213,7 @@ const AppOverviewPage = ({
         </ol>
       </article>
     </section>
+    )}
   </>
 );
 

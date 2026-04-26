@@ -492,6 +492,8 @@ pub struct UserRecord {
     pub email: String,
     pub username: String,
     pub display_name: String,
+    #[serde(default)]
+    pub is_admin: bool,
     pub password_hash: String,
     pub created_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
@@ -515,6 +517,7 @@ pub struct UserProfile {
     pub email: String,
     pub username: String,
     pub display_name: String,
+    pub is_admin: bool,
     pub created_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
 }

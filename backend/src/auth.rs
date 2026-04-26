@@ -8,7 +8,8 @@ use rand_core::OsRng;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::store::{
-    find_session_by_token, find_user_by_id, revoke_session_by_token, upsert_session_record,
+    count_admin_users, find_first_user_record, find_session_by_token, find_user_by_id,
+    revoke_session_by_token, upsert_session_record, upsert_user_record,
 };
 use crate::types::{
     AuthContext, AuthSessionResponse, CurrentSessionResponse, SessionRecord, UserProfile,
@@ -104,6 +105,7 @@ pub fn build_user_profile(user: &UserRecord) -> UserProfile {
         email: user.email.clone(),
         username: user.username.clone(),
         display_name: user.display_name.clone(),
+        is_admin: user.is_admin,
         created_at: user.created_at.to_owned(),
         last_login_at: user.last_login_at.to_owned(),
     }
@@ -145,6 +147,32 @@ pub fn build_session(user_id: &str) -> SessionRecord {
     }
 }
 
+pub async fn ensure_admin_compatibility(
+    user: UserRecord,
+    state: &AppState,
+) -> Result<UserRecord, AppError> {
+    if user.is_admin {
+        return Ok(user);
+    }
+
+    if count_admin_users(state).await? > 0 {
+        return Ok(user);
+    }
+
+    let Some(first_user) = find_first_user_record(state).await? else {
+        return Ok(user);
+    };
+
+    if first_user.user_id != user.user_id {
+        return Ok(user);
+    }
+
+    let mut upgraded_user = user;
+    upgraded_user.is_admin = true;
+    upsert_user_record(state, &upgraded_user).await?;
+    Ok(upgraded_user)
+}
+
 pub async fn require_auth(headers: &HeaderMap, state: &AppState) -> Result<AuthContext, AppError> {
     let header_value = headers
         .get(AUTHORIZATION)
@@ -170,6 +198,7 @@ pub async fn require_auth(headers: &HeaderMap, state: &AppState) -> Result<AuthC
     let user = find_user_by_id(&session.user_id, state)
         .await?
         .ok_or_else(|| AppError::Unauthorized("session user not found".to_string()))?;
+    let user = ensure_admin_compatibility(user, state).await?;
 
     session.last_seen_at = Utc::now();
     let _ = upsert_session_record(state, &session).await;

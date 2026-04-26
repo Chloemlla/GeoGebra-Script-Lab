@@ -420,6 +420,42 @@ impl MongoStore {
         .await
     }
 
+    pub async fn find_first_user(&self) -> Result<Option<UserRecord>, AppError> {
+        self.find_one_record(
+            "find_first_user",
+            &self.users,
+            doc! {},
+            Some(doc! { "createdAt": 1 }),
+        )
+        .await
+    }
+
+    pub async fn count_admin_users(&self) -> Result<u64, AppError> {
+        let started_at = Instant::now();
+        let count = self
+            .users
+            .count_documents(doc! { "isAdmin": true })
+            .await
+            .map_err(|err| AppError::Internal(format!("unable to count admin users: {err}")))?;
+        self.metrics
+            .record_mongo_query("count_admin_users", started_at.elapsed());
+
+        Ok(count)
+    }
+
+    pub async fn count_users(&self) -> Result<u64, AppError> {
+        let started_at = Instant::now();
+        let count = self
+            .users
+            .count_documents(doc! {})
+            .await
+            .map_err(|err| AppError::Internal(format!("unable to count users: {err}")))?;
+        self.metrics
+            .record_mongo_query("count_users", started_at.elapsed());
+
+        Ok(count)
+    }
+
     pub async fn upsert_session(&self, record: &SessionRecord) -> Result<(), AppError> {
         self.upsert_record("upsert_session", &self.sessions, &record.session_id, record)
             .await
