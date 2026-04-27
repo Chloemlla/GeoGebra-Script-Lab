@@ -191,9 +191,34 @@ const withPowershellJsonOutput = (command) => `${POWERSHELL_BOOTSTRAP}
 Invoke-ApiJson {
 ${command}
 }`;
-const POWERSHELL_OUTPUT_COMMAND = withPowershellJsonOutput(
-  'Invoke-RestMethod -Uri "$env:API_BASE/api/v1/..." -Method Get'
-);
+const POWERSHELL_OUTPUT_COMMAND = withPowershellJsonOutput(`$imageBytes = [System.IO.File]::ReadAllBytes(".\\reference.png")
+$imageBase64 = [Convert]::ToBase64String($imageBytes)
+$imageDataUrl = "data:image/png;base64,$imageBase64"
+
+$body = @{
+  model = "gpt-4o"
+  messages = @(
+    @{
+      role = "user"
+      content = @(
+        @{
+          type = "text"
+          text = "描述一下图片"
+        },
+        @{
+          type = "image_url"
+          image_url = @{
+            url = $imageDataUrl
+          }
+        }
+      )
+    }
+  )
+} | ConvertTo-Json -Depth 10
+
+Invoke-RestMethod -Uri "$env:OPENAI_BASE_URL/v1/chat/completions" -Method Post -Headers @{
+  Authorization = "Bearer $env:OPENAI_API_KEY"
+} -ContentType "application/json; charset=utf-8" -Body $body`);
 const OPEN_SOURCE_REPOSITORY_SEGMENTS = Object.freeze([
   'github.com',
   'Chloemlla',

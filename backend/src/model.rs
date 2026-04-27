@@ -67,11 +67,19 @@ impl ModelClient {
             input.canvas_mode, input.locale, input.prompt
         );
 
+        let user_content = match input.asset_data_url.as_ref() {
+            Some(image_url) => json!([
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ]),
+            None => json!(prompt),
+        };
+
         let body = json!({
             "model": self.model_name,
             "messages": [
                 {"role": "system", "content": "You only output structured JSON for GeoGebra drawing tasks."},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": user_content},
             ],
             "temperature": 0.2,
             "response_format": {"type": "json_object"}
@@ -99,7 +107,7 @@ impl ModelClient {
             .await
             .map_err(|err| AppError::Internal(format!("invalid model response: {err}")))?;
 
-        Ok(ModelDrawingResponse::from_json(json))
+        Ok(ModelDrawingResponse::from_json(parse_content_json(json)))
     }
 
     pub async fn generate_script_insights(

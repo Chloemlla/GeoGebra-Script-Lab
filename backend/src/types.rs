@@ -85,6 +85,8 @@ pub struct DrawingJobCreateRequest {
     #[serde(rename = "responseFormat")]
     pub response_format: String,
     pub locale: String,
+    #[serde(skip)]
+    pub asset_data_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

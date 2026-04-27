@@ -1357,7 +1357,7 @@ async fn create_drawing_job(
 ) -> Result<Response<Full<Bytes>>, AppError> {
     let auth = require_auth(request.headers(), &state).await?;
     let body = read_json(request).await?;
-    let payload: DrawingJobCreateRequest = serde_json::from_value(body)
+    let mut payload: DrawingJobCreateRequest = serde_json::from_value(body)
         .map_err(|err| AppError::BadRequest(format!("invalid drawing job body: {err}")))?;
 
     let asset = find_asset_record(&payload.asset_id, &state)
@@ -1378,6 +1378,19 @@ async fn create_drawing_job(
         ));
     }
 
+    let uploaded_asset = find_asset_payload(&payload.asset_id, &state)
+        .await?
+        .ok_or_else(|| {
+            AppError::BadRequest(format!("asset payload not found: {}", payload.asset_id))
+        })?;
+
+    if !uploaded_asset.content_type.starts_with("image/") {
+        return Err(AppError::BadRequest(format!(
+            "drawing job asset must be an image, got {}",
+            uploaded_asset.content_type
+        )));
+    }
+
     if payload.prompt.trim().is_empty() {
         return Err(AppError::BadRequest("prompt is required".to_string()));
     }
@@ -1387,6 +1400,12 @@ async fn create_drawing_job(
             "responseFormat and locale are required"
         )));
     }
+
+    payload.asset_data_url = Some(format!(
+        "data:{};base64,{}",
+        uploaded_asset.content_type,
+        base64::engine::general_purpose::STANDARD.encode(uploaded_asset.bytes.as_ref())
+    ));
 
     let job_id = format!("job_{}", short_id());
 
