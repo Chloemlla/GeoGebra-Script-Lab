@@ -2420,6 +2420,27 @@ const App = () => {
     }
   }, [pushUiNotice]);
 
+  const handleExportGGB = useCallback(async () => {
+    const ggbData = GeoGebraEngine.exportGGB();
+    if (ggbData) {
+      const link = document.createElement('a');
+      link.href = ggbData;
+      link.download = `geogebra-${Date.now()}.ggb`;
+      link.click();
+
+      setLogs((prev) => [
+        ...prev,
+        {
+          message: 'GGB 文件已导出',
+          level: 'success',
+          timestamp: new Date(),
+        },
+      ]);
+    } else {
+      pushUiNotice('导出 GGB 失败', 'danger');
+    }
+  }, [pushUiNotice]);
+
   const handleReset = useCallback(() => {
     GeoGebraEngine.reset();
     clearCanvasDrift();
@@ -5173,6 +5194,7 @@ const App = () => {
                   onRun={handleRun}
                   onClear={handleClear}
                   onExport={handleExport}
+                  onExportGGB={handleExportGGB}
                   onReset={handleReset}
                   canvasModes={CANVAS_MODES}
                   selectedCanvasModeId={selectedCanvasModeId}

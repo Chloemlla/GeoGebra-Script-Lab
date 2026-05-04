@@ -500,6 +500,27 @@ class GeoGebraEngine {
   }
 
   /**
+   * 导出 GGB 文件
+   * @returns {string|null}
+   */
+  exportGGB() {
+    if (!this.isReady) return null;
+    try {
+      if (typeof this.applet.getBase64 === 'function') {
+        const base64 = this.applet.getBase64();
+        return typeof base64 === 'string' && base64.length > 0
+          ? `data:application/vnd.geogebra.file;base64,${base64}`
+          : null;
+      }
+
+      throw new TypeError('GeoGebra API 不支持 GGB 导出');
+    } catch (error) {
+      console.error('导出 GGB 文件失败', error);
+      return null;
+    }
+  }
+
+  /**
    * 批量更新对象样式
    * @param {object} options
    * @param {string[]} options.objectNames - 目标对象

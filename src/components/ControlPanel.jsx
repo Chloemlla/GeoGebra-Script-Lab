@@ -22,6 +22,7 @@ const ControlPanel = ({
   onRun,
   onClear,
   onExport,
+  onExportGGB,
   onReset,
   canvasModes = [],
   selectedCanvasModeId = '',
@@ -166,6 +167,19 @@ const ControlPanel = ({
             <AppIcon className="btn-icon-image" decorative />
           </span>
           导出图片
+        </button>
+
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onExportGGB}
+          disabled={isExecuting}
+          title="导出为 GGB 文件"
+        >
+          <span className="btn-icon" aria-hidden="true">
+            <AppIcon className="btn-icon-image" decorative />
+          </span>
+          导出 GGB
         </button>
 
         <button
