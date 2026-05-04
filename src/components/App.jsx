@@ -4120,6 +4120,9 @@ const App = () => {
                 <button type="button" className="banner-btn banner-btn-secondary" onClick={handleExport}>
                   导出 PNG
                 </button>
+                <button type="button" className="banner-btn banner-btn-secondary" onClick={handleExportGGB}>
+                  导出 GGB
+                </button>
                 <button
                   type="button"
                   className="banner-btn banner-btn-secondary active"
