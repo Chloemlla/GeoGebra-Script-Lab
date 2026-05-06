@@ -4384,7 +4384,7 @@ const App = () => {
             </section>
           )}
 
-          {!presentationMode && (
+          {/* {!presentationMode && (
             <section className="chapter chapter-white api-section">
               <div className="chapter-header">
                 <div>
@@ -4453,7 +4453,7 @@ const App = () => {
                 </article>
               </div>
             </section>
-          )}
+          )} */}
 
           <div className={`workspace ${isCompactLayout ? 'mobile-mode' : ''} ${presentationMode ? 'presentation-active' : ''}`}>
             {!presentationMode && (
@@ -4462,7 +4462,7 @@ const App = () => {
                   <div>
                     <span className="section-kicker">Script Editor</span>
                     <h2>代码编辑台</h2>
-                    <p>支持 UTF-8 中文注释、专用高亮主题与 Ctrl+Enter 快速运行。</p>
+                    {/* <p>支持 Ctrl+Enter 快速运行。</p> */}
                   </div>
                   <div className="section-meta">
                     <span className="meta-pill">{populatedCodeLines} 行内容</span>
