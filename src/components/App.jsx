@@ -835,6 +835,8 @@ const App = () => {
   const openSourceLinkRef = useRef(null);
   const queuedScriptRef = useRef(null);
   const workspaceShellRef = useRef(null);
+  const canvasSectionRef = useRef(null);
+  const mobileCanvasScrollPendingRef = useRef(false);
   const driftBaselineCodeRef = useRef(null);
   const lecturePlayTokenRef = useRef(0);
   const hasInitializedWorkspaceRef = useRef(false);
@@ -898,6 +900,7 @@ const App = () => {
           * 100
       )}%`
     : '未执行';
+  const hasCodeToRun = code.trim().length > 0;
   const currentProject = useMemo(
     () => savedProjects.find((project) => project.id === currentProjectId) ?? null,
     [currentProjectId, savedProjects]
@@ -2322,11 +2325,8 @@ const App = () => {
     }
   }, [executePreparedCommands, initializeDispatcher, refreshCanvasObjects, selectedCanvasMode.label]);
 
-  const handleRun = useCallback(async () => {
-    if (!dispatcherRef.current) {
-      pushUiNotice('GeoGebra 尚未初始化，请稍候...', 'warning');
-      return;
-    }
+  const handleRun = useCallback(async (options = {}) => {
+    const preserveCanvasTab = Boolean(options?.preserveCanvasTab);
 
     if (canvasDrift.isDirty) {
       const confirmed = window.confirm(
@@ -2368,7 +2368,7 @@ const App = () => {
         }))
       );
       pushUiNotice(`代码验证失败，有 ${validation.errors.length} 个错误`, 'danger');
-      if (isCompactLayout) {
+      if (isCompactLayout && !preserveCanvasTab) {
         setActiveTab('code');
       }
       return;
@@ -2378,6 +2378,19 @@ const App = () => {
       versionLabel: '运行脚本',
     });
   }, [canvasDrift.isDirty, code, executePreparedCommands, isCompactLayout, pushUiNotice]);
+
+  const handleMobileApplyAndRun = useCallback(async () => {
+    if (!hasCodeToRun || isExecuting) {
+      return;
+    }
+
+    if (isPhoneLayout) {
+      mobileCanvasScrollPendingRef.current = true;
+      setActiveTab('canvas');
+    }
+
+    await handleRun({ preserveCanvasTab: true });
+  }, [handleRun, hasCodeToRun, isExecuting, isPhoneLayout]);
 
   const resetVersionBrowsing = useCallback(() => {
     versionDraftStateRef.current = null;
@@ -3856,6 +3869,18 @@ const App = () => {
   }, [isCanvasLocked]);
 
   useEffect(() => {
+    if (!mobileCanvasScrollPendingRef.current || !isPhoneLayout || activeTab !== 'canvas') {
+      return;
+    }
+
+    mobileCanvasScrollPendingRef.current = false;
+    canvasSectionRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  }, [activeTab, isPhoneLayout]);
+
+  useEffect(() => {
     if (typeof window === 'undefined' || !window.localStorage) {
       return;
     }
@@ -4430,7 +4455,6 @@ const App = () => {
             </section>
           )}
 
-
           <div className={`workspace ${isCompactLayout ? 'mobile-mode' : ''} ${presentationMode ? 'presentation-active' : ''}`}>
             {!presentationMode && (
               <section className={`editor-section ${!isCompactLayout || activeTab === 'code' ? 'active' : ''}`}>
@@ -4797,6 +4821,23 @@ const App = () => {
                   theme="geogebra-workbench"
                 />
 
+                {!presentationMode && isPhoneLayout && hasCodeToRun && (
+                  <div className="mobile-code-actions">
+                    <button
+                      type="button"
+                      className="studio-btn studio-btn-primary"
+                      onClick={() => {
+                        handleMobileApplyAndRun().catch((error) => {
+                          pushUiNotice(error.message, 'danger');
+                        });
+                      }}
+                      disabled={isExecuting}
+                    >
+                      应用并运行
+                    </button>
+                  </div>
+                )}
+
                 <div className="studio-grid studio-grid-secondary">
                   <article className="studio-card">
                     <div className="studio-card-head">
@@ -5087,7 +5128,10 @@ const App = () => {
               </section>
             )}
 
-            <section className={`canvas-section ${presentationMode || !isCompactLayout || activeTab === 'canvas' ? 'active' : ''}`}>
+            <section
+              ref={canvasSectionRef}
+              className={`canvas-section ${presentationMode || !isCompactLayout || activeTab === 'canvas' ? 'active' : ''}`}
+            >
               <div className="section-heading">
                 <div>
                   <span className="section-kicker">Live Canvas</span>

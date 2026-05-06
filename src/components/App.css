@@ -1126,6 +1126,10 @@ a.studio-btn {
   color: #ffffff;
 }
 
+.mobile-code-actions {
+  display: none;
+}
+
 .studio-inline-btn.active,
 .object-chip.active {
   border-color: rgba(0, 113, 227, 0.16);
@@ -1599,5 +1603,10 @@ a.studio-btn {
   .workspace-head-note {
     min-width: 0;
     width: 100%;
+  }
+
+  .mobile-code-actions {
+    display: flex;
+    margin-top: -4px;
   }
 }
