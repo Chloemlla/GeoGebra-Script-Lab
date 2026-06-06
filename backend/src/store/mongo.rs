@@ -5,15 +5,15 @@ use mongodb::{Client as MongoClient, Collection, IndexModel};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::error::AppError;
 use crate::metrics::MetricsRegistry;
 use crate::threat_intel::SCAMALYTICS_SETTING_ID;
 use crate::types::{
     AssetRecord, DrawingJobRecord, ExportJobRecord, IpThreatProviderConfigRecord, ProjectRecord,
-    ProjectVersionRecord, ReviewCommentRecord, SessionRecord, ShareRecord, TeamMembershipRecord,
-    TeamRecord, UploadedAsset, UserRecord,
+    ProjectVersionRecord, ReviewCommentRecord, ShareRecord, TeamMembershipRecord, TeamRecord,
+    UploadedAsset,
 };
 
 #[derive(Clone)]
@@ -28,8 +28,6 @@ pub struct MongoStore {
     teams: Collection<Document>,
     team_memberships: Collection<Document>,
     review_comments: Collection<Document>,
-    users: Collection<Document>,
-    sessions: Collection<Document>,
     app_settings: Collection<Document>,
     metrics: Arc<MetricsRegistry>,
 }
@@ -62,8 +60,6 @@ impl MongoStore {
             teams: database.collection("teams"),
             team_memberships: database.collection("team_memberships"),
             review_comments: database.collection("review_comments"),
-            users: database.collection("users"),
-            sessions: database.collection("sessions"),
             app_settings: database.collection("app_settings"),
             metrics,
         };
@@ -385,85 +381,6 @@ impl MongoStore {
         .await
     }
 
-    pub async fn upsert_user(&self, record: &UserRecord) -> Result<(), AppError> {
-        self.upsert_record("upsert_user", &self.users, &record.user_id, record)
-            .await
-    }
-
-    pub async fn find_user_by_id(&self, user_id: &str) -> Result<Option<UserRecord>, AppError> {
-        self.find_one_record(
-            "find_user_by_id",
-            &self.users,
-            doc! { "_id": user_id },
-            None,
-        )
-        .await
-    }
-
-    pub async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, AppError> {
-        self.find_one_record(
-            "find_user_by_email",
-            &self.users,
-            doc! { "email": email },
-            None,
-        )
-        .await
-    }
-
-    pub async fn find_user_by_username(
-        &self,
-        username: &str,
-    ) -> Result<Option<UserRecord>, AppError> {
-        self.find_one_record(
-            "find_user_by_username",
-            &self.users,
-            doc! { "username": username },
-            None,
-        )
-        .await
-    }
-
-    pub async fn find_first_user(&self) -> Result<Option<UserRecord>, AppError> {
-        self.find_one_record(
-            "find_first_user",
-            &self.users,
-            doc! {},
-            Some(doc! { "createdAt": 1 }),
-        )
-        .await
-    }
-
-    pub async fn count_admin_users(&self) -> Result<u64, AppError> {
-        let started_at = Instant::now();
-        let count = self
-            .users
-            .count_documents(doc! { "isAdmin": true })
-            .await
-            .map_err(|err| AppError::Internal(format!("unable to count admin users: {err}")))?;
-        self.metrics
-            .record_mongo_query("count_admin_users", started_at.elapsed());
-
-        Ok(count)
-    }
-
-    pub async fn count_users(&self) -> Result<u64, AppError> {
-        let started_at = Instant::now();
-        let count = self
-            .users
-            .count_documents(doc! {})
-            .await
-            .map_err(|err| AppError::Internal(format!("unable to count users: {err}")))?;
-        self.metrics
-            .record_mongo_query("count_users", started_at.elapsed());
-
-        Ok(count)
-    }
-
-    pub async fn upsert_session(&self, record: &SessionRecord) -> Result<(), AppError> {
-        self.upsert_record("upsert_session", &self.sessions, &record.session_id, record)
-            .await
-    }
-
     pub async fn upsert_ip_threat_provider_config(
         &self,
         record: &IpThreatProviderConfigRecord,
@@ -487,35 +404,6 @@ impl MongoStore {
             None,
         )
         .await
-    }
-
-    pub async fn find_session_by_token(
-        &self,
-        token: &str,
-    ) -> Result<Option<SessionRecord>, AppError> {
-        self.find_one_record(
-            "find_session_by_token",
-            &self.sessions,
-            doc! { "token": token },
-            None,
-        )
-        .await
-    }
-
-    pub async fn delete_session_by_token(
-        &self,
-        token: &str,
-    ) -> Result<Option<SessionRecord>, AppError> {
-        let started_at = Instant::now();
-        let document = self
-            .sessions
-            .find_one_and_delete(doc! { "token": token })
-            .await
-            .map_err(|err| AppError::Internal(format!("unable to delete session: {err}")))?;
-        self.metrics
-            .record_mongo_query("delete_session_by_token", started_at.elapsed());
-
-        document.map(document_into_record).transpose()
     }
 
     async fn ensure_indexes(&self) -> Result<(), AppError> {
@@ -590,39 +478,10 @@ impl MongoStore {
         )
         .await?;
         self.create_unique_index(
-            "create_index_users_email",
-            &self.users,
-            doc! { "email": 1 },
-            "users_email_unique",
-        )
-        .await?;
-        self.create_unique_index(
-            "create_index_users_username",
-            &self.users,
-            doc! { "username": 1 },
-            "users_username_unique",
-        )
-        .await?;
-        self.create_unique_index(
-            "create_index_sessions_token",
-            &self.sessions,
-            doc! { "token": 1 },
-            "sessions_token_unique",
-        )
-        .await?;
-        self.create_unique_index(
             "create_index_app_settings_provider",
             &self.app_settings,
             doc! { "provider": 1 },
             "app_settings_provider_unique",
-        )
-        .await?;
-        self.create_ttl_index(
-            "create_index_sessions_expires_at_ttl",
-            &self.sessions,
-            doc! { "expiresAt": 1 },
-            "sessions_expires_at_ttl",
-            Duration::from_secs(0),
         )
         .await?;
 
@@ -763,32 +622,6 @@ impl MongoStore {
         Ok(())
     }
 
-    async fn create_ttl_index(
-        &self,
-        operation_name: &str,
-        collection: &Collection<Document>,
-        keys: Document,
-        name: &str,
-        expire_after: Duration,
-    ) -> Result<(), AppError> {
-        let started_at = Instant::now();
-        let options = IndexOptions::builder()
-            .name(Some(name.to_string()))
-            .expire_after(Some(expire_after))
-            .build();
-        let model = IndexModel::builder()
-            .keys(keys)
-            .options(Some(options))
-            .build();
-
-        collection.create_index(model).await.map_err(|err| {
-            AppError::Internal(format!("unable to create MongoDB TTL index: {err}"))
-        })?;
-        self.metrics
-            .record_mongo_query(operation_name, started_at.elapsed());
-
-        Ok(())
-    }
 }
 
 fn document_into_record<T: DeserializeOwned>(document: Document) -> Result<T, AppError> {

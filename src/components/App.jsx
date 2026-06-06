@@ -20,6 +20,7 @@ import Preprocessor from '../engine/Preprocessor';
 import Dispatcher from '../engine/Dispatcher';
 import useAppRoute from '../hooks/useAppRoute';
 import {
+  buildSynapseOAuthStartUrl,
   createAnnotationJob,
   clearAuthToken,
   createDrawingJob,
@@ -46,13 +47,11 @@ import {
   listReviewComments,
   listTeamMembers,
   listTeams,
-  loginUser,
   lookupIpThreat,
-  logoutUser,
   pollDrawingJob,
   pollExportJob,
+  refreshAuthSession,
   reserveUpload,
-  registerUser,
   setAuthToken,
   setUnauthorizedHandler,
   updateIpThreatConfig,
@@ -62,6 +61,8 @@ import {
 } from '../api/backend';
 import {
   clearStoredAuthSession,
+  consumeSynapseOAuthResult,
+  isAuthSessionExpiringSoon,
   readStoredAuthSession,
   writeStoredAuthSession,
 } from '../utils/auth';
@@ -616,46 +617,8 @@ const hydrateVersionFromApi = (version) => ({
   summary: version.summary,
 });
 
-const AUTH_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const AUTH_USERNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
 const UI_NOTICE_DURATION_MS = 4200;
 const UI_NOTICE_MAX_ITEMS = 4;
-
-const evaluatePasswordStrength = (password) => {
-  const value = typeof password === 'string' ? password : '';
-  const signals = [
-    value.length >= 8,
-    /[a-z]/.test(value) && /[A-Z]/.test(value),
-    /\d/.test(value),
-    /[^A-Za-z0-9]/.test(value),
-  ].filter(Boolean).length;
-
-  if (value.length === 0) {
-    return {
-      label: '等待输入密码',
-      tone: 'neutral',
-    };
-  }
-
-  if (signals <= 1) {
-    return {
-      label: '密码强度偏弱',
-      tone: 'danger',
-    };
-  }
-
-  if (signals === 2 || value.length < 10) {
-    return {
-      label: '密码强度中等',
-      tone: 'warning',
-    };
-  }
-
-  return {
-    label: '密码强度良好',
-    tone: 'success',
-  };
-};
 
 const App = () => {
   const storedStudioState = readStudioState();
@@ -690,29 +653,20 @@ const App = () => {
     ipThreatConfigured: false,
     ipThreatBaseUrl: '',
   });
-  const [authMode, setAuthMode] = useState('login');
   const [authState, setAuthState] = useState(
     storedAuthSession?.token
       ? {
           state: 'checking',
-          message: '正在恢复登录会话',
+          message: '正在恢复 Synapse OAuth 会话',
         }
       : {
           state: 'guest',
-          message: '登录后即可使用受保护的上传、AI 生成与分享接口',
+          message: '使用 Synapse OAuth 后即可调用受保护接口',
         }
   );
   const [authSession, setAuthSession] = useState(storedAuthSession);
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
   const [uiNotices, setUiNotices] = useState([]);
-  const [authForm, setAuthForm] = useState({
-    account: '',
-    email: '',
-    username: '',
-    displayName: '',
-    password: '',
-    confirmPassword: '',
-  });
   const [adminDashboard, setAdminDashboard] = useState(null);
   const [adminState, setAdminState] = useState({
     state: 'loading',
@@ -731,7 +685,7 @@ const App = () => {
   });
   const [cloudSyncState, setCloudSyncState] = useState({
     state: storedAuthSession?.token ? 'idle' : 'neutral',
-    message: storedAuthSession?.token ? '等待恢复云同步能力' : '登录后启用云同步与导出队列',
+    message: storedAuthSession?.token ? '等待恢复云同步能力' : 'Synapse OAuth 后启用云同步与导出队列',
     workspaceKey: getWorkspaceKey(),
     lastSyncedAt: null,
   });
@@ -746,7 +700,7 @@ const App = () => {
   });
   const [teamSyncState, setTeamSyncState] = useState({
     state: 'idle',
-    message: '登录后可创建团队空间',
+    message: 'Synapse OAuth 后可创建团队空间',
   });
   const [projectDraft, setProjectDraft] = useState({
     title: storedCurrentProject?.title ?? DEFAULT_PROJECT_TITLE,
@@ -964,66 +918,15 @@ const App = () => {
     ? `${currentUser.displayName || currentUser.username} (@${currentUser.username})`
     : '';
   const canPublishShare = isAuthenticated && code.trim().length > 0 && !isExecuting && !isGeneratingScript;
-  const authValidation = useMemo(() => {
-    const fieldErrors = {
-      account: '',
-      email: '',
-      username: '',
-      password: '',
-      confirmPassword: '',
-    };
-
-    if (authMode === 'register') {
-      if (!authForm.email.trim()) {
-        fieldErrors.email = '请输入邮箱地址';
-      } else if (!AUTH_EMAIL_PATTERN.test(authForm.email.trim())) {
-        fieldErrors.email = '邮箱格式不正确';
-      }
-
-      if (!authForm.username.trim()) {
-        fieldErrors.username = '请输入用户名';
-      } else if (!AUTH_USERNAME_PATTERN.test(authForm.username.trim())) {
-        fieldErrors.username = '用户名需为 3-24 位字母、数字、_ 或 -';
-      }
-
-      if (!authForm.password) {
-        fieldErrors.password = '请输入密码';
-      } else if (authForm.password.length < 8) {
-        fieldErrors.password = '密码至少需要 8 位';
-      }
-
-      if (!authForm.confirmPassword) {
-        fieldErrors.confirmPassword = '请再次输入密码';
-      } else if (authForm.password !== authForm.confirmPassword) {
-        fieldErrors.confirmPassword = '两次输入的密码不一致';
-      }
-    } else {
-      if (!authForm.account.trim()) {
-        fieldErrors.account = '请输入邮箱或用户名';
-      }
-
-      if (!authForm.password) {
-        fieldErrors.password = '请输入密码';
-      }
-    }
-
-    const hasError = Object.values(fieldErrors).some(Boolean);
-    const passwordStrength = evaluatePasswordStrength(authForm.password);
-
-    return {
-      canSubmit: !hasError,
-      fieldErrors,
-      passwordStrength,
-      formMessage:
-        authMode === 'register'
-          ? hasError
-            ? '完善注册信息后会自动创建账号并立即登录。'
-            : '注册成功后会直接解锁云同步、上传、分享与导出能力。'
-          : hasError
-          ? '填写账号与密码后即可恢复后端身份。'
-          : '登录后将自动恢复云端项目、导出队列与后端受保护接口。',
-    };
-  }, [authForm.account, authForm.confirmPassword, authForm.email, authForm.password, authForm.username, authMode]);
+  const authValidation = useMemo(() => ({
+    canSubmit: true,
+    fieldErrors: {},
+    passwordStrength: {
+      label: 'Synapse OAuth',
+      tone: 'success',
+    },
+    formMessage: '将跳转到 Synapse 授权页，授权成功后返回当前页面。',
+  }), []);
 
   const normalizedProjectTags = useMemo(
     () => formatTagsInput(parseTagsInput(projectDraft.tagsInput)) || '未设置标签',
@@ -1115,8 +1018,7 @@ const App = () => {
     uiNoticeTimersRef.current.set(noticeId, timer);
   }, [dismissUiNotice]);
 
-  const focusAuthentication = useCallback((message = '', mode = 'login') => {
-    setAuthMode(mode);
+  const focusAuthentication = useCallback((message = '') => {
     if (message) {
       pushUiNotice(message, 'warning');
     }
@@ -1648,43 +1550,15 @@ const App = () => {
     driftBaselineCodeRef.current = null;
   }, []);
 
-  const resetAuthForm = useCallback(() => {
-    setAuthForm({
-      account: '',
-      email: '',
-      username: '',
-      displayName: '',
-      password: '',
-      confirmPassword: '',
-    });
-  }, []);
-
-  const handleAuthFieldChange = useCallback((field, value) => {
-    setAuthForm((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-  }, []);
-
-  const handleAuthModeChange = useCallback((nextMode) => {
-    setAuthMode(nextMode);
-    if (authState.state !== 'authenticated') {
-      setAuthState({
-        state: 'guest',
-        message:
-          nextMode === 'register'
-            ? '创建账号后会立即登录，并解锁云同步、上传、分享与导出。'
-            : '登录后即可恢复云端项目和所有受保护接口。',
-      });
-    }
-  }, [authState.state]);
-
   const applyAuthenticatedSession = useCallback(
     (session, successMessage) => {
       const normalizedSession = {
         token: session.token,
         tokenType: session.tokenType || 'Bearer',
         expiresAt: session.expiresAt || null,
+        refreshToken: session.refreshToken || null,
+        refreshExpiresAt: session.refreshExpiresAt || null,
+        scope: session.scope || '',
         user: session.user,
       };
 
@@ -1697,14 +1571,13 @@ const App = () => {
       setCloudSyncState((prev) => ({
         ...prev,
         state: 'idle',
-        message: '已登录，正在准备云同步',
+        message: 'Synapse OAuth 已连接，正在准备云同步',
       }));
       writeStoredAuthSession(normalizedSession);
-      resetAuthForm();
       appendLog(successMessage, 'success');
       pushUiNotice(successMessage, 'success');
     },
-    [appendLog, pushUiNotice, resetAuthForm]
+    [appendLog, pushUiNotice]
   );
 
   const handleAuthSubmit = useCallback(async () => {
@@ -1712,48 +1585,24 @@ const App = () => {
       return;
     }
 
-    if (!authValidation.canSubmit) {
-      pushUiNotice('请先修正认证表单中的字段提示', 'warning');
-      return;
-    }
-
     setIsSubmittingAuth(true);
+    setAuthState({
+      state: 'checking',
+      message: '正在跳转到 Synapse 授权页',
+    });
 
     try {
-      if (authMode === 'register') {
-        const session = await registerUser({
-          email: authForm.email.trim(),
-          username: authForm.username.trim(),
-          displayName: authForm.displayName.trim(),
-          password: authForm.password,
-        });
-
-        applyAuthenticatedSession(
-          session,
-          `注册成功，当前已使用 ${session.user.displayName || session.user.username} 登录`
-        );
-      } else {
-        const session = await loginUser({
-          account: authForm.account.trim(),
-          password: authForm.password,
-        });
-
-        applyAuthenticatedSession(
-          session,
-          `登录成功，欢迎回来 ${session.user.displayName || session.user.username}`
-        );
-      }
+      window.location.assign(buildSynapseOAuthStartUrl(window.location.href));
     } catch (error) {
       setAuthState({
         state: 'error',
         message: error.message,
       });
-      appendLog(`认证失败：${error.message}`, 'error');
+      appendLog(`Synapse OAuth 启动失败：${error.message}`, 'error');
       pushUiNotice(error.message, 'danger');
-    } finally {
       setIsSubmittingAuth(false);
     }
-  }, [applyAuthenticatedSession, appendLog, authForm, authMode, authValidation.canSubmit, isSubmittingAuth, pushUiNotice]);
+  }, [appendLog, isSubmittingAuth, pushUiNotice]);
 
   const handleLogout = useCallback(async () => {
     if (isSubmittingAuth) {
@@ -1762,16 +1611,9 @@ const App = () => {
 
     setIsSubmittingAuth(true);
 
-    try {
-      await logoutUser();
-    } catch (error) {
-      appendLog(`退出登录请求失败：${error.message}`, 'error');
-    } finally {
-      clearAuthentication('已退出登录');
-      setAuthMode('login');
-      setIsSubmittingAuth(false);
-    }
-  }, [appendLog, clearAuthentication, isSubmittingAuth]);
+    clearAuthentication('已清除 Synapse OAuth 本地凭证');
+    setIsSubmittingAuth(false);
+  }, [clearAuthentication, isSubmittingAuth]);
 
   const refreshAdminDashboard = useCallback(async (options = {}) => {
     const { silent = false } = options;
@@ -3700,10 +3542,26 @@ const App = () => {
   }, [isAdminUser, isAuthenticated]);
 
   useEffect(() => {
+    const result = consumeSynapseOAuthResult();
+    if (!result) {
+      return;
+    }
+
+    if (result.error) {
+      clearAuthentication(`Synapse OAuth 失败：${result.error}`, 'error');
+      return;
+    }
+
+    applyAuthenticatedSession(
+      result.session,
+      `Synapse OAuth 登录成功，当前身份 ${result.session.user?.displayName || result.session.user?.username || '当前用户'}`
+    );
+  }, [applyAuthenticatedSession, clearAuthentication]);
+
+  useEffect(() => {
     let isCancelled = false;
 
     if (!storedAuthSession?.token) {
-      clearAuthToken();
       return () => {
         isCancelled = true;
       };
@@ -3713,15 +3571,26 @@ const App = () => {
 
     const restoreAuthSession = async () => {
       try {
-        const currentSession = await fetchCurrentUser();
+        const refreshedSession =
+          isAuthSessionExpiringSoon(storedAuthSession) && storedAuthSession.refreshToken
+            ? await refreshAuthSession(storedAuthSession.refreshToken)
+            : null;
+        if (refreshedSession?.token) {
+          setAuthToken(refreshedSession.token);
+        }
+
+        const currentSession = refreshedSession || await fetchCurrentUser();
         if (isCancelled) {
           return;
         }
 
         const nextSession = {
-          token: storedAuthSession.token,
-          tokenType: storedAuthSession.tokenType || 'Bearer',
+          token: currentSession.token || storedAuthSession.token,
+          tokenType: currentSession.tokenType || storedAuthSession.tokenType || 'Bearer',
           expiresAt: currentSession.expiresAt || storedAuthSession.expiresAt || null,
+          refreshToken: currentSession.refreshToken || storedAuthSession.refreshToken || null,
+          refreshExpiresAt: currentSession.refreshExpiresAt || storedAuthSession.refreshExpiresAt || null,
+          scope: currentSession.scope || storedAuthSession.scope || '',
           user: currentSession.user || storedAuthSession.user,
         };
 
@@ -4073,15 +3942,11 @@ const App = () => {
           <AppAuthPage
             panelRef={authPanelRef}
             authState={authState}
-            authMode={authMode}
-            authForm={authForm}
             authValidation={authValidation}
             isSubmittingAuth={isSubmittingAuth}
             currentUser={currentUser}
             authSession={authSession}
             isAuthenticated={isAuthenticated}
-            handleAuthModeChange={handleAuthModeChange}
-            handleAuthFieldChange={handleAuthFieldChange}
             handleAuthSubmit={handleAuthSubmit}
             handleLogout={handleLogout}
           />

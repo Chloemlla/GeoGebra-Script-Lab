@@ -174,22 +174,6 @@ pub struct ShareCreateRequest {
     pub allow_fork: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RegisterRequest {
-    pub email: String,
-    pub username: String,
-    pub password: String,
-    pub display_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginRequest {
-    pub account: String,
-    pub password: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectVersionSummary {
@@ -554,38 +538,17 @@ pub struct ModelConfigUpdateRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserRecord {
-    pub user_id: String,
-    pub email: String,
-    pub username: String,
-    pub display_name: String,
-    #[serde(default)]
-    pub is_admin: bool,
-    pub password_hash: String,
-    pub created_at: DateTime<Utc>,
-    pub last_login_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionRecord {
-    pub session_id: String,
-    pub user_id: String,
-    pub token: String,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub last_seen_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct UserProfile {
     pub user_id: String,
     pub email: String,
     pub username: String,
     pub display_name: String,
     pub is_admin: bool,
-    pub created_at: DateTime<Utc>,
+    pub is_trusted: bool,
+    pub role: String,
+    pub account_status: String,
+    pub avatar_url: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
     pub last_login_at: Option<DateTime<Utc>>,
 }
 
@@ -593,20 +556,33 @@ pub struct UserProfile {
 #[serde(rename_all = "camelCase")]
 pub struct AuthSessionResponse {
     pub token: String,
-    pub token_type: &'static str,
-    pub expires_at: DateTime<Utc>,
+    pub token_type: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub refresh_token: Option<String>,
+    pub refresh_expires_at: Option<DateTime<Utc>>,
+    pub scope: String,
     pub user: UserProfile,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrentSessionResponse {
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub scope: String,
     pub user: UserProfile,
 }
 
 #[derive(Debug, Clone)]
 pub struct AuthContext {
-    pub user: UserRecord,
-    pub session: SessionRecord,
+    pub user: UserProfile,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthStateRecord {
+    pub state: String,
+    pub return_to: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }

@@ -11,10 +11,8 @@ use std::time::Instant;
 
 use crate::admin::build_admin_dashboard;
 use crate::auth::{
-    build_auth_session_response, build_current_session_response, build_session,
-    ensure_admin_compatibility, hash_password, normalize_display_name, normalize_email,
-    normalize_username, require_admin, require_auth, validate_email, validate_password,
-    validate_username, verify_password,
+    build_current_session_response, build_synapse_authorization_url,
+    exchange_synapse_authorization_code, refresh_synapse_token, require_admin, require_auth,
 };
 use crate::error::AppError;
 use crate::frontend::serve_frontend_asset;
@@ -26,28 +24,28 @@ use crate::metrics::endpoint_label;
 use crate::model::ModelClient;
 use crate::state::AppState;
 use crate::store::{
-    cache_asset_payload, count_users, find_any_job_record, find_asset_payload, find_asset_record,
+    cache_asset_payload, find_any_job_record, find_asset_payload, find_asset_record,
     find_export_job_record, find_ip_threat_provider_config, find_job_record, find_project_record,
     find_project_versions_by_project, find_review_comment_record, find_share_by_slug,
-    find_team_record, find_user_by_email, find_user_by_id, find_user_by_username,
+    find_team_record,
     list_projects_by_team, list_projects_by_user, list_projects_by_workspace,
     list_review_comments_by_project, list_team_memberships_by_team, list_teams_by_user,
-    revoke_session_by_token, upsert_asset_record, upsert_export_job_record,
-    upsert_ip_threat_provider_config, upsert_job_record, upsert_project_record,
-    upsert_project_version_record, upsert_review_comment_record, upsert_session_record,
-    upsert_share_record, upsert_team_membership_record, upsert_team_record, upsert_user_record,
+    upsert_asset_record, upsert_export_job_record, upsert_ip_threat_provider_config,
+    upsert_job_record, upsert_project_record, upsert_project_version_record,
+    upsert_review_comment_record, upsert_share_record, upsert_team_membership_record,
+    upsert_team_record,
 };
 use crate::threat_intel::build_ip_threat_provider_config;
 use crate::types::{
     AnnotationJobRequest, Diagnostics, DrawingJobCreateRequest, DrawingJobRecord,
     DrawingJobResultResponse, ExportJobCreateRequest, ExportJobRecord, ExportJobStatus,
-    IpThreatConfigUpdateRequest, JobStatus, LoginRequest, ModelConfigUpdateRequest,
-    ObjectExplanationRequest, ProjectCreateRequest, ProjectRecord, ProjectUpdateRequest,
-    ProjectVersionCreateRequest, ProjectVersionRecord, ProjectVersionSummary, RegisterRequest,
-    RenderHints, ReviewCommentCreateRequest, ReviewCommentRecord, ReviewCommentUpdateRequest,
+    IpThreatConfigUpdateRequest, JobStatus, ModelConfigUpdateRequest, ObjectExplanationRequest,
+    OAuthStateRecord, ProjectCreateRequest, ProjectRecord, ProjectUpdateRequest,
+    ProjectVersionCreateRequest, ProjectVersionRecord, ProjectVersionSummary, RenderHints,
+    ReviewCommentCreateRequest, ReviewCommentRecord, ReviewCommentUpdateRequest,
     ScriptInsightsRequest, ShareCreateRequest, ShareRecord, TeamCreateRequest,
     TeamMemberCreateRequest, TeamMembershipRecord, TeamRecord, TeamRole, UploadCreateRequest,
-    UploadedAsset, UserRecord, Viewport,
+    UploadedAsset, Viewport,
 };
 use crate::utils::{fallback_commands, request_id, short_id, short_id_suffix, slugify};
 
@@ -146,10 +144,13 @@ pub async fn route_request(
             ),
         )),
         (Method::GET, "/api/v1/ip-threat/config") => get_ip_threat_config(request, state).await,
-        (Method::POST, "/api/v1/auth/register") => register_user(request, state).await,
-        (Method::POST, "/api/v1/auth/login") => login_user(request, state).await,
+        (Method::GET, "/api/v1/auth/config") => get_auth_config(state).await,
+        (Method::GET, "/api/v1/auth/oauth/start") => start_synapse_oauth(request, state).await,
+        (Method::GET, "/api/v1/auth/oauth/callback") => {
+            complete_synapse_oauth(request, state).await
+        }
+        (Method::POST, "/api/v1/auth/refresh") => refresh_synapse_auth(request, state).await,
         (Method::GET, "/api/v1/auth/me") => get_current_session(request, state).await,
-        (Method::POST, "/api/v1/auth/logout") => logout_user(request, state).await,
         (Method::PUT, "/api/v1/model/config") => update_model_config(request, state).await,
         (Method::PUT, "/api/v1/ip-threat/config") => update_ip_threat_config(request, state).await,
         (Method::GET, "/api/v1/ip-threat/lookup") => lookup_ip_threat(request, state).await,
@@ -189,106 +190,139 @@ pub async fn route_request(
     }
 }
 
-async fn register_user(
-    request: Request<Incoming>,
-    state: AppState,
-) -> Result<Response<Full<Bytes>>, AppError> {
-    let body = read_json(request).await?;
-    let payload: RegisterRequest = serde_json::from_value(body)
-        .map_err(|err| AppError::BadRequest(format!("invalid register body: {err}")))?;
-
-    validate_email(&payload.email)?;
-    validate_username(&payload.username)?;
-    validate_password(&payload.password)?;
-
-    let email = normalize_email(&payload.email);
-    let username = normalize_username(&payload.username);
-
-    if find_user_by_email(&email, &state).await?.is_some() {
-        return Err(AppError::Conflict(
-            "email is already registered".to_string(),
-        ));
-    }
-
-    if find_user_by_username(&username, &state).await?.is_some() {
-        return Err(AppError::Conflict("username is already taken".to_string()));
-    }
-
-    let is_first_registered_user = count_users(&state).await? == 0;
-
-    let user = UserRecord {
-        user_id: format!("user_{}", short_id()),
-        email,
-        username: username.clone(),
-        display_name: normalize_display_name(payload.display_name.as_deref(), &username),
-        is_admin: is_first_registered_user,
-        password_hash: hash_password(&payload.password)?,
-        created_at: Utc::now(),
-        last_login_at: Some(Utc::now()),
-    };
-    let session = build_session(&user.user_id);
-    upsert_user_record(&state, &user).await?;
-    upsert_session_record(&state, &session).await?;
-    let user = ensure_admin_compatibility(user, &state).await?;
-    let response =
-        build_auth_session_response(session.token.clone(), session.expires_at.to_owned(), &user);
-
+async fn get_auth_config(state: AppState) -> Result<Response<Full<Bytes>>, AppError> {
     Ok(json_response(
-        StatusCode::CREATED,
+        StatusCode::OK,
         envelope(
             true,
-            "AUTH_REGISTERED",
-            "account created",
+            "AUTH_CONFIG",
+            "Synapse OAuth config",
             request_id(),
-            Some(json!(response)),
+            Some(json!({
+                "provider": "synapse",
+                "synapseBaseUrl": state.config.synapse_base_url,
+                "authorizationStartUrl": "/api/v1/auth/oauth/start",
+                "redirectUri": state.config.synapse_oauth_redirect_uri,
+                "scope": state.config.synapse_oauth_scope,
+                "clientConfigured": !state.config.synapse_oauth_client_id.trim().is_empty()
+                    && !state.config.synapse_oauth_client_secret.trim().is_empty(),
+            })),
             None,
         ),
     ))
 }
 
-async fn login_user(
+async fn start_synapse_oauth(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let query = request.uri().query().unwrap_or_default();
+    let params = url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .collect::<std::collections::HashMap<String, String>>();
+    let return_to = normalize_oauth_return_to(params.get("returnTo"), request.headers(), &state);
+    let oauth_state = format!("oauth_{}", short_id());
+    let record = OAuthStateRecord {
+        state: oauth_state.clone(),
+        return_to,
+        created_at: Utc::now(),
+        expires_at: Utc::now() + chrono::Duration::minutes(10),
+    };
+
+    {
+        let mut store = state.store.write().await;
+        store.oauth_states.retain(|_, value| value.expires_at > Utc::now());
+        store.oauth_states.insert(oauth_state.clone(), record);
+    }
+
+    let authorization_url = build_synapse_authorization_url(&state, &oauth_state)?;
+    Ok(redirect_response(&authorization_url))
+}
+
+async fn complete_synapse_oauth(
+    request: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let query = request.uri().query().unwrap_or_default();
+    let params = url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .collect::<std::collections::HashMap<String, String>>();
+    let oauth_state = params
+        .get("state")
+        .map(String::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let state_record = take_oauth_state(&state, &oauth_state).await?;
+
+    if let Some(error) = params.get("error") {
+        let description = params
+            .get("error_description")
+            .map(String::as_str)
+            .unwrap_or(error);
+        return Ok(redirect_response(&append_fragment_param(
+            &state_record.return_to,
+            "synapseError",
+            description,
+        )));
+    }
+
+    let code = params
+        .get("code")
+        .map(String::as_str)
+        .unwrap_or_default()
+        .trim();
+    if code.is_empty() {
+        return Ok(redirect_response(&append_fragment_param(
+            &state_record.return_to,
+            "synapseError",
+            "missing authorization code",
+        )));
+    }
+
+    match exchange_synapse_authorization_code(&state, code).await {
+        Ok(session) => {
+            let payload = serde_json::to_vec(&session).map_err(|err| {
+                AppError::Internal(format!("unable to serialize OAuth session: {err}"))
+            })?;
+            let encoded =
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+            Ok(redirect_response(&append_fragment_param(
+                &state_record.return_to,
+                "synapseAuth",
+                &encoded,
+            )))
+        }
+        Err(error) => Ok(redirect_response(&append_fragment_param(
+            &state_record.return_to,
+            "synapseError",
+            &error.to_string(),
+        ))),
+    }
+}
+
+async fn refresh_synapse_auth(
     request: Request<Incoming>,
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
     let body = read_json(request).await?;
-    let payload: LoginRequest = serde_json::from_value(body)
-        .map_err(|err| AppError::BadRequest(format!("invalid login body: {err}")))?;
-
-    let account = payload.account.trim();
-    if account.is_empty() {
-        return Err(AppError::BadRequest("account is required".to_string()));
-    }
-
-    let account_key = account.to_ascii_lowercase();
-    let mut user = if account_key.contains('@') {
-        find_user_by_email(&normalize_email(account), &state).await?
-    } else {
-        find_user_by_username(&normalize_username(account), &state).await?
-    }
-    .ok_or_else(|| AppError::Unauthorized("account or password is incorrect".to_string()))?;
-
-    if !verify_password(&payload.password, &user.password_hash)? {
-        return Err(AppError::Unauthorized(
-            "account or password is incorrect".to_string(),
-        ));
-    }
-
-    user.last_login_at = Some(Utc::now());
-    let session = build_session(&user.user_id);
-    upsert_user_record(&state, &user).await?;
-    upsert_session_record(&state, &session).await?;
-    let user = ensure_admin_compatibility(user, &state).await?;
-    let response =
-        build_auth_session_response(session.token.clone(), session.expires_at.to_owned(), &user);
+    let refresh_token = body
+        .get("refreshToken")
+        .or_else(|| body.get("refresh_token"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::BadRequest("refreshToken is required".to_string()))?;
+    let session = refresh_synapse_token(&state, refresh_token).await?;
 
     Ok(json_response(
         StatusCode::OK,
         envelope(
             true,
-            "AUTH_LOGGED_IN",
-            "login succeeded",
+            "AUTH_REFRESHED",
+            "Synapse OAuth token refreshed",
             request_id(),
-            Some(json!(response)),
+            Some(json!(session)),
             None,
         ),
     ))
@@ -299,38 +333,16 @@ async fn get_current_session(
     state: AppState,
 ) -> Result<Response<Full<Bytes>>, AppError> {
     let auth = require_auth(request.headers(), &state).await?;
-    let response = build_current_session_response(&auth.session, &auth.user);
+    let response = build_current_session_response(&auth);
 
     Ok(json_response(
         StatusCode::OK,
         envelope(
             true,
             "AUTH_SESSION",
-            "session is valid",
+            "Synapse token is valid",
             request_id(),
             Some(json!(response)),
-            None,
-        ),
-    ))
-}
-
-async fn logout_user(
-    request: Request<Incoming>,
-    state: AppState,
-) -> Result<Response<Full<Bytes>>, AppError> {
-    let auth = require_auth(request.headers(), &state).await?;
-    revoke_session_by_token(&auth.session.token, &state).await?;
-
-    Ok(json_response(
-        StatusCode::OK,
-        envelope(
-            true,
-            "AUTH_LOGGED_OUT",
-            "logout succeeded",
-            request_id(),
-            Some(json!({
-                "sessionId": auth.session.session_id,
-            })),
             None,
         ),
     ))
@@ -922,16 +934,16 @@ async fn create_team_member(
         .ok_or(AppError::NotFound)?;
     let memberships = list_team_memberships_by_team(team_id, &state).await?;
     ensure_team_access(&team, &memberships, &auth.user.user_id, TeamRole::Admin)?;
-    if find_user_by_id(&payload.user_id, &state).await?.is_none() {
+    if payload.user_id.trim().is_empty() {
         return Err(AppError::BadRequest(
-            "target user does not exist".to_string(),
+            "target Synapse user id is required".to_string(),
         ));
     }
 
     let membership = TeamMembershipRecord {
         membership_id: format!("tm_{}", short_id()),
         team_id: team_id.to_string(),
-        user_id: payload.user_id,
+        user_id: payload.user_id.trim().to_string(),
         role: payload.role,
         created_at: Utc::now(),
     };
@@ -1762,6 +1774,104 @@ async fn get_share(path: String, state: AppState) -> Result<Response<Full<Bytes>
             None,
         ),
     ))
+}
+
+fn redirect_response(location: &str) -> Response<Full<Bytes>> {
+    let mut response = Response::new(Full::new(Bytes::new()));
+    *response.status_mut() = StatusCode::FOUND;
+    if let Ok(value) = HeaderValue::from_str(location) {
+        response.headers_mut().insert(http::header::LOCATION, value);
+    }
+    response
+}
+
+async fn take_oauth_state(
+    state: &AppState,
+    oauth_state: &str,
+) -> Result<OAuthStateRecord, AppError> {
+    if oauth_state.is_empty() {
+        return Err(AppError::BadRequest("missing OAuth state".to_string()));
+    }
+
+    let record = state
+        .store
+        .write()
+        .await
+        .oauth_states
+        .remove(oauth_state)
+        .ok_or_else(|| AppError::Unauthorized("OAuth state is invalid".to_string()))?;
+
+    if record.expires_at <= Utc::now() {
+        return Err(AppError::Unauthorized("OAuth state expired".to_string()));
+    }
+
+    Ok(record)
+}
+
+fn append_fragment_param(base_url: &str, key: &str, value: &str) -> String {
+    let encoded_value = url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
+    if base_url.contains('#') {
+        format!("{base_url}&{key}={encoded_value}")
+    } else {
+        format!("{base_url}#{key}={encoded_value}")
+    }
+}
+
+fn normalize_oauth_return_to(
+    raw_return_to: Option<&String>,
+    headers: &HeaderMap,
+    state: &AppState,
+) -> String {
+    let fallback = format!(
+        "{}/auth",
+        state.config.frontend_base_url.trim_end_matches('/')
+    );
+    let Some(candidate) = raw_return_to.map(String::as_str).map(str::trim) else {
+        return fallback;
+    };
+
+    if candidate.starts_with('/') && !candidate.starts_with("//") {
+        return candidate.to_string();
+    }
+
+    let Ok(candidate_url) = url::Url::parse(candidate) else {
+        return fallback;
+    };
+    let Some(candidate_origin) = origin_of(&candidate_url) else {
+        return fallback;
+    };
+
+    let mut allowed_origins = Vec::new();
+    for raw_url in [&state.config.frontend_base_url, &state.config.api_base_url] {
+        if let Ok(url) = url::Url::parse(raw_url) {
+            if let Some(origin) = origin_of(&url) {
+                allowed_origins.push(origin);
+            }
+        }
+    }
+
+    for header_name in [http::header::ORIGIN, http::header::REFERER] {
+        if let Some(origin) = headers
+            .get(header_name)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| url::Url::parse(value).ok())
+            .and_then(|url| origin_of(&url))
+        {
+            allowed_origins.push(origin);
+        }
+    }
+
+    if allowed_origins.iter().any(|origin| origin == &candidate_origin) {
+        candidate.to_string()
+    } else {
+        fallback
+    }
+}
+
+fn origin_of(url: &url::Url) -> Option<String> {
+    let host = url.host_str()?;
+    let port = url.port().map(|port| format!(":{port}")).unwrap_or_default();
+    Some(format!("{}://{}{}", url.scheme(), host, port))
 }
 
 fn require_workspace_key(headers: &HeaderMap) -> Result<String, AppError> {

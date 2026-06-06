@@ -1,129 +1,163 @@
-﻿name: Build And Upload Artifact
+﻿name: Build artifacts
 
 on:
   push:
     branches:
       - main
-      - master
   pull_request:
-    branches:
-      - main
-      - master
   workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
-  actions: read
-
-concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
+  packages: write
 
 jobs:
   build:
+    name: Build frontend and backend
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: pnpm
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
 
-      - name: Build
-        run: pnpm build
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
 
-      - name: Upload dist artifact
+      - name: Upload frontend artifact
         uses: actions/upload-artifact@v4
         with:
-          name: geogebra-script-lab-dist-${{ github.sha }}
-          path: dist
+          name: frontend-dist
+          path: frontend/dist
           if-no-files-found: error
-          retention-days: 14
 
-  rust-backend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Rust toolchain
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            backend/target
-          key: rust-${{ runner.os }}-${{ hashFiles('backend/Cargo.lock', 'backend/Cargo.toml') }}
-          restore-keys: |
-            rust-${{ runner.os }}-
+      - name: Build backend
+        run: cargo build --manifest-path backend/Cargo.toml --release
 
-      - name: Build Rust backend release binary
-        run: cargo build --release --locked
-
-      - name: Upload Rust backend artifact
+      - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
-          name: geograba-rust-backend-${{ github.sha }}
-          path: |
-            backend/target/release/geograba-backend
-            backend/target/release/geograba-backend.d
+          name: backend-linux-x86_64
+          path: backend/target/release/pixel-api
           if-no-files-found: error
-          retention-days: 14
 
-  docker-images:
+  publish-image:
+    name: Publish Docker image
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image_label: backend-only
-            docker_target: backend-runtime
-            artifact_prefix: geograba-backend-only-image
-          - image_label: fullstack
-            docker_target: fullstack-runtime
-            artifact_prefix: geograba-fullstack-image
+    outputs:
+      deploy_image: ${{ steps.image.outputs.deploy_image }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build ${{ matrix.image_label }} image archive
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: image
+        shell: bash
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          ref_tag="$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]/' '[:lower:]-' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^-+|-+$//g')"
+          short_sha="$(git rev-parse --short HEAD)"
+          image="ghcr.io/${repo}"
+
+          {
+            echo "deploy_image=${image}:sha-${short_sha}"
+            echo "tags<<EOF"
+            echo "${image}:${ref_tag}"
+            echo "${image}:sha-${short_sha}"
+            if [ "${GITHUB_REF_NAME}" = "main" ]; then
+              echo "${image}:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          target: ${{ matrix.docker_target }}
-          tags: geograba:${{ matrix.image_label }}-${{ github.sha }}
-          outputs: type=docker,dest=/tmp/${{ matrix.image_label }}.tar
-          cache-from: type=gha,scope=${{ matrix.image_label }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image_label }}
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          cache-from: type=gha,scope=build-artifacts
+          cache-to: type=gha,mode=max,scope=build-artifacts
 
-      - name: Upload ${{ matrix.image_label }} image artifact
-        uses: actions/upload-artifact@v4
+  deploy-image:
+    name: Deploy GHCR image
+    needs: publish-image
+    if: github.event_name != 'pull_request' && needs['publish-image'].result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          name: ${{ matrix.artifact_prefix }}-${{ github.sha }}
-          path: /tmp/${{ matrix.image_label }}.tar
-          if-no-files-found: error
-          retention-days: 14
+          node-version: 24
+
+      - name: Check deployment configuration
+        id: deploy_config
+        env:
+          SERVER_ADDRESS: ${{ secrets.SERVER_ADDRESS }}
+          USERNAME: ${{ secrets.USERNAME }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          CONTAINER_NAMES: ${{ secrets.CONTAINER_NAMES }}
+        run: |
+          if [ -n "$SERVER_ADDRESS" ] && [ -n "$USERNAME" ] && [ -n "$PRIVATE_KEY" ] && [ -n "$CONTAINER_NAMES" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Remote deployment skipped: SERVER_ADDRESS, USERNAME, PRIVATE_KEY, or CONTAINER_NAMES is not configured."
+          fi
+
+      - name: Install deployment dependencies
+        if: steps.deploy_config.outputs.enabled == 'true'
+        run: npm install --no-save --no-package-lock ssh2 dotenv axios form-data
+
+      - name: Download deployment script
+        if: steps.deploy_config.outputs.enabled == 'true'
+        run: |
+          mkdir -p scripts
+          curl -fsSL https://raw.githubusercontent.com/Chloemlla/Happy-TTS/refs/heads/main/scripts/deploy_image.js -o scripts/deploy_image.js
+          chmod +x scripts/deploy_image.js
+
+      - name: Run deployment script
+        if: steps.deploy_config.outputs.enabled == 'true'
+        env:
+          SERVER_ADDRESS: ${{ secrets.SERVER_ADDRESS }}
+          USERNAME: ${{ secrets.USERNAME }}
+          PORT: ${{ secrets.PORT }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          CONTAINER_NAMES: ${{ secrets.CONTAINER_NAMES }}
+          IMAGE_URL: ${{ needs['publish-image'].outputs.deploy_image }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: node scripts/deploy_image.js

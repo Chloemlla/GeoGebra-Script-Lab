@@ -119,6 +119,23 @@ export function setUnauthorizedHandler(handler) {
   unauthorizedHandler = typeof handler === 'function' ? handler : null;
 }
 
+export function buildSynapseOAuthStartUrl(returnTo = '') {
+  const query = new URLSearchParams();
+  const resolvedReturnTo =
+    returnTo
+    || (typeof window !== 'undefined' ? window.location.href : '/auth');
+  if (resolvedReturnTo) {
+    query.set('returnTo', resolvedReturnTo);
+  }
+
+  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  return buildUrl(`/api/v1/auth/oauth/start${suffix}`);
+}
+
+export async function fetchAuthConfig() {
+  return request('/api/v1/auth/config');
+}
+
 export async function fetchHealth() {
   return request('/health');
 }
@@ -407,26 +424,13 @@ export async function downloadExportJob(exportJobId) {
   };
 }
 
-export async function registerUser(payload) {
-  return request('/api/v1/auth/register', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function loginUser(payload) {
-  return request('/api/v1/auth/login', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
 export async function fetchCurrentUser() {
   return request('/api/v1/auth/me');
 }
 
-export async function logoutUser() {
-  return request('/api/v1/auth/logout', {
+export async function refreshAuthSession(refreshToken) {
+  return request('/api/v1/auth/refresh', {
     method: 'POST',
+    body: { refreshToken },
   });
 }

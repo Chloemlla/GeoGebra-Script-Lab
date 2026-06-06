@@ -1,218 +1,319 @@
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
 use chrono::{Duration, Utc};
 use http::header::AUTHORIZATION;
 use http::HeaderMap;
-use rand_core::OsRng;
+use serde::Deserialize;
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::store::{
-    count_admin_users, find_first_user_record, find_session_by_token, find_user_by_id,
-    revoke_session_by_token, upsert_session_record, upsert_user_record,
-};
-use crate::types::{
-    AuthContext, AuthSessionResponse, CurrentSessionResponse, SessionRecord, UserProfile,
-    UserRecord,
-};
-use crate::utils::short_id;
+use crate::types::{AuthContext, AuthSessionResponse, CurrentSessionResponse, UserProfile};
 
-const SESSION_TTL_DAYS: i64 = 30;
-
-pub fn normalize_email(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+#[derive(Debug, Clone, Deserialize)]
+struct SynapseTokenResponse {
+    access_token: String,
+    token_type: Option<String>,
+    expires_in: Option<i64>,
+    refresh_token: Option<String>,
+    refresh_expires_in: Option<i64>,
+    scope: Option<String>,
 }
 
-pub fn normalize_username(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SynapseUserInfo {
+    sub: Option<String>,
+    id: Option<String>,
+    username: Option<String>,
+    name: Option<String>,
+    email: Option<String>,
+    avatar_url: Option<String>,
+    role: Option<String>,
+    roles: Option<Vec<String>>,
+    #[serde(default, alias = "is_admin")]
+    is_admin: Option<bool>,
+    #[serde(default, alias = "synapse_admin")]
+    synapse_admin: Option<bool>,
+    #[serde(default)]
+    admin: Option<bool>,
+    #[serde(default, alias = "is_trusted")]
+    is_trusted: Option<bool>,
+    #[serde(default)]
+    created_at: Option<chrono::DateTime<Utc>>,
+    #[serde(default)]
+    account_status: Option<String>,
 }
 
-pub fn validate_email(email: &str) -> Result<(), AppError> {
-    let trimmed = normalize_email(email);
-    let Some((local, domain)) = trimmed.split_once('@') else {
-        return Err(AppError::BadRequest("email format is invalid".to_string()));
-    };
-
-    if local.is_empty() || domain.len() < 3 || !domain.contains('.') {
-        return Err(AppError::BadRequest("email format is invalid".to_string()));
-    }
-
-    Ok(())
-}
-
-pub fn validate_username(username: &str) -> Result<(), AppError> {
-    let normalized = normalize_username(username);
-    let length = normalized.chars().count();
-
-    if !(3..=24).contains(&length) {
-        return Err(AppError::BadRequest(
-            "username must be between 3 and 24 characters".to_string(),
-        ));
-    }
-
-    if !normalized
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-    {
-        return Err(AppError::BadRequest(
-            "username may only contain letters, numbers, hyphens, and underscores".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-pub fn validate_password(password: &str) -> Result<(), AppError> {
-    if password.chars().count() < 8 {
-        return Err(AppError::BadRequest(
-            "password must be at least 8 characters long".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-pub fn normalize_display_name(display_name: Option<&str>, username: &str) -> String {
-    let candidate = display_name
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(username)
-        .trim();
-
-    candidate.chars().take(40).collect()
-}
-
-pub fn hash_password(password: &str) -> Result<String, AppError> {
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|err| AppError::Internal(format!("unable to hash password: {err}")))
-}
-
-pub fn verify_password(password: &str, password_hash: &str) -> Result<bool, AppError> {
-    let parsed = PasswordHash::new(password_hash)
-        .map_err(|err| AppError::Internal(format!("stored password hash is invalid: {err}")))?;
-
-    Ok(Argon2::default()
-        .verify_password(password.as_bytes(), &parsed)
-        .is_ok())
-}
-
-pub fn build_user_profile(user: &UserRecord) -> UserProfile {
-    UserProfile {
-        user_id: user.user_id.clone(),
-        email: user.email.clone(),
-        username: user.username.clone(),
-        display_name: user.display_name.clone(),
-        is_admin: user.is_admin,
-        created_at: user.created_at.to_owned(),
-        last_login_at: user.last_login_at.to_owned(),
-    }
-}
-
-pub fn build_auth_session_response(
-    token: String,
-    expires_at: chrono::DateTime<Utc>,
-    user: &UserRecord,
-) -> AuthSessionResponse {
-    AuthSessionResponse {
-        token,
-        token_type: "Bearer",
-        expires_at,
-        user: build_user_profile(user),
-    }
-}
-
-pub fn build_current_session_response(
-    session: &SessionRecord,
-    user: &UserRecord,
-) -> CurrentSessionResponse {
-    CurrentSessionResponse {
-        expires_at: session.expires_at.to_owned(),
-        user: build_user_profile(user),
-    }
-}
-
-pub fn build_session(user_id: &str) -> SessionRecord {
-    let now = Utc::now();
-
-    SessionRecord {
-        session_id: format!("sess_{}", short_id()),
-        user_id: user_id.to_string(),
-        token: format!("gtk_{}", short_id()),
-        created_at: now,
-        expires_at: now + Duration::days(SESSION_TTL_DAYS),
-        last_seen_at: now,
-    }
-}
-
-pub async fn ensure_admin_compatibility(
-    user: UserRecord,
-    state: &AppState,
-) -> Result<UserRecord, AppError> {
-    if user.is_admin {
-        return Ok(user);
-    }
-
-    if count_admin_users(state).await? > 0 {
-        return Ok(user);
-    }
-
-    let Some(first_user) = find_first_user_record(state).await? else {
-        return Ok(user);
-    };
-
-    if first_user.user_id != user.user_id {
-        return Ok(user);
-    }
-
-    let mut upgraded_user = user;
-    upgraded_user.is_admin = true;
-    upsert_user_record(state, &upgraded_user).await?;
-    Ok(upgraded_user)
-}
-
-pub async fn require_auth(headers: &HeaderMap, state: &AppState) -> Result<AuthContext, AppError> {
+pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, AppError> {
     let header_value = headers
         .get(AUTHORIZATION)
         .ok_or_else(|| AppError::Unauthorized("missing bearer token".to_string()))?
         .to_str()
         .map_err(|_| AppError::Unauthorized("authorization header is invalid".to_string()))?;
-    let token = header_value
+
+    header_value
         .strip_prefix("Bearer ")
         .or_else(|| header_value.strip_prefix("bearer "))
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::Unauthorized("missing bearer token".to_string()))?;
+        .map(ToString::to_string)
+        .ok_or_else(|| AppError::Unauthorized("missing bearer token".to_string()))
+}
 
-    let mut session = find_session_by_token(token, state)
-        .await?
-        .ok_or_else(|| AppError::Unauthorized("session not found".to_string()))?;
-
-    if session.expires_at <= Utc::now() {
-        let _ = revoke_session_by_token(token, state).await;
-        return Err(AppError::Unauthorized("session expired".to_string()));
+pub fn ensure_synapse_oauth_config(state: &AppState) -> Result<(), AppError> {
+    if state.config.synapse_oauth_client_id.trim().is_empty() {
+        return Err(AppError::Unavailable(
+            "SYNAPSE_OAUTH_CLIENT_ID is not configured".to_string(),
+        ));
     }
 
-    let user = find_user_by_id(&session.user_id, state)
-        .await?
-        .ok_or_else(|| AppError::Unauthorized("session user not found".to_string()))?;
-    let user = ensure_admin_compatibility(user, state).await?;
+    if state.config.synapse_oauth_client_secret.trim().is_empty() {
+        return Err(AppError::Unavailable(
+            "SYNAPSE_OAUTH_CLIENT_SECRET is not configured".to_string(),
+        ));
+    }
 
-    session.last_seen_at = Utc::now();
-    let _ = upsert_session_record(state, &session).await;
+    Ok(())
+}
 
-    Ok(AuthContext { user, session })
+pub fn build_synapse_authorization_url(
+    state: &AppState,
+    oauth_state: &str,
+) -> Result<String, AppError> {
+    ensure_synapse_oauth_config(state)?;
+
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer
+        .append_pair("response_type", "code")
+        .append_pair("client_id", &state.config.synapse_oauth_client_id)
+        .append_pair("redirect_uri", &state.config.synapse_oauth_redirect_uri)
+        .append_pair("scope", &state.config.synapse_oauth_scope)
+        .append_pair("state", oauth_state);
+    let query = serializer.finish();
+
+    Ok(format!(
+        "{}/oauth/authorize?{}",
+        state.config.synapse_base_url.trim_end_matches('/'),
+        query
+    ))
+}
+
+pub async fn exchange_synapse_authorization_code(
+    state: &AppState,
+    code: &str,
+) -> Result<AuthSessionResponse, AppError> {
+    ensure_synapse_oauth_config(state)?;
+
+    let token_response = post_synapse_token(
+        state,
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", &state.config.synapse_oauth_redirect_uri),
+        ],
+    )
+    .await?;
+
+    build_auth_session_from_token_response(state, token_response).await
+}
+
+pub async fn refresh_synapse_token(
+    state: &AppState,
+    refresh_token: &str,
+) -> Result<AuthSessionResponse, AppError> {
+    ensure_synapse_oauth_config(state)?;
+
+    let token_response = post_synapse_token(
+        state,
+        &[("grant_type", "refresh_token"), ("refresh_token", refresh_token)],
+    )
+    .await?;
+
+    build_auth_session_from_token_response(state, token_response).await
+}
+
+pub async fn require_auth(headers: &HeaderMap, state: &AppState) -> Result<AuthContext, AppError> {
+    let token = extract_bearer_token(headers)?;
+    let user = fetch_synapse_userinfo(state, &token).await?;
+
+    Ok(AuthContext {
+        user,
+        scope: state.config.synapse_oauth_scope.clone(),
+    })
 }
 
 pub async fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<AuthContext, AppError> {
     let auth = require_auth(headers, state).await?;
     if !auth.user.is_admin {
         return Err(AppError::Unauthorized(
-            "administrator access is required".to_string(),
+            "Synapse administrator access is required".to_string(),
         ));
     }
 
     Ok(auth)
+}
+
+pub fn build_current_session_response(auth: &AuthContext) -> CurrentSessionResponse {
+    CurrentSessionResponse {
+        expires_at: None,
+        scope: auth.scope.clone(),
+        user: auth.user.clone(),
+    }
+}
+
+async fn post_synapse_token(
+    state: &AppState,
+    params: &[(&str, &str)],
+) -> Result<SynapseTokenResponse, AppError> {
+    let endpoint = format!(
+        "{}/api/oauth/token",
+        state.config.synapse_base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::new();
+    let response = client
+        .post(endpoint)
+        .basic_auth(
+            state.config.synapse_oauth_client_id.trim(),
+            Some(state.config.synapse_oauth_client_secret.trim()),
+        )
+        .form(params)
+        .send()
+        .await
+        .map_err(|err| AppError::Unavailable(format!("unable to reach Synapse token API: {err}")))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|err| AppError::Unavailable(format!("unable to read Synapse token API: {err}")))?;
+
+    if !status.is_success() {
+        return Err(AppError::Unauthorized(format!(
+            "Synapse token exchange failed: {body}"
+        )));
+    }
+
+    serde_json::from_str(&body)
+        .map_err(|err| AppError::Internal(format!("invalid Synapse token response: {err}")))
+}
+
+async fn build_auth_session_from_token_response(
+    state: &AppState,
+    token_response: SynapseTokenResponse,
+) -> Result<AuthSessionResponse, AppError> {
+    let user = fetch_synapse_userinfo(state, &token_response.access_token).await?;
+    let now = Utc::now();
+
+    Ok(AuthSessionResponse {
+        token: token_response.access_token,
+        token_type: token_response
+            .token_type
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "Bearer".to_string()),
+        expires_at: token_response.expires_in.map(|seconds| now + Duration::seconds(seconds)),
+        refresh_token: token_response.refresh_token,
+        refresh_expires_at: token_response
+            .refresh_expires_in
+            .map(|seconds| now + Duration::seconds(seconds)),
+        scope: token_response
+            .scope
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| state.config.synapse_oauth_scope.clone()),
+        user,
+    })
+}
+
+async fn fetch_synapse_userinfo(
+    state: &AppState,
+    access_token: &str,
+) -> Result<UserProfile, AppError> {
+    let endpoint = format!(
+        "{}/api/oauth/userinfo",
+        state.config.synapse_base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::new();
+    let response = client
+        .get(endpoint)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|err| AppError::Unavailable(format!("unable to reach Synapse userinfo: {err}")))?;
+    let status = response.status();
+    let body = response.text().await.map_err(|err| {
+        AppError::Unavailable(format!("unable to read Synapse userinfo response: {err}"))
+    })?;
+
+    if !status.is_success() {
+        return Err(AppError::Unauthorized(format!(
+            "Synapse token is invalid: {body}"
+        )));
+    }
+
+    let user_info: SynapseUserInfo = serde_json::from_str(&body)
+        .map_err(|err| AppError::Internal(format!("invalid Synapse userinfo response: {err}")))?;
+
+    normalize_synapse_user(user_info)
+}
+
+fn normalize_synapse_user(user_info: SynapseUserInfo) -> Result<UserProfile, AppError> {
+    let user_id = user_info
+        .sub
+        .or(user_info.id)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Unauthorized("Synapse user id is missing".to_string()))?;
+    let username = user_info
+        .username
+        .or_else(|| user_info.name.clone())
+        .unwrap_or_else(|| user_id.clone())
+        .trim()
+        .to_string();
+    let display_name = user_info
+        .name
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| username.clone());
+    let role = user_info
+        .role
+        .or_else(|| {
+            user_info
+                .roles
+                .as_ref()
+                .and_then(|roles| roles.first().cloned())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    let is_admin = user_info.is_admin.unwrap_or(false)
+        || user_info.synapse_admin.unwrap_or(false)
+        || user_info.admin.unwrap_or(false)
+        || role == "admin";
+    let is_trusted = user_info.is_trusted.unwrap_or(false) || role == "trusted";
+    let account_status = user_info
+        .account_status
+        .unwrap_or_else(|| "active".to_string())
+        .trim()
+        .to_ascii_lowercase();
+
+    if account_status != "active" {
+        return Err(AppError::Unauthorized(
+            "Synapse account is not active".to_string(),
+        ));
+    }
+
+    if !is_admin && !is_trusted {
+        return Err(AppError::Unauthorized(
+            "Synapse admin or trusted user is required".to_string(),
+        ));
+    }
+
+    Ok(UserProfile {
+        user_id,
+        email: user_info.email.unwrap_or_default(),
+        username,
+        display_name,
+        is_admin,
+        is_trusted,
+        role,
+        account_status,
+        avatar_url: user_info.avatar_url,
+        created_at: user_info.created_at,
+        last_login_at: None,
+    })
 }

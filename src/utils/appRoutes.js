@@ -10,7 +10,7 @@ export const APP_PAGES = Object.freeze([
     id: APP_PAGE_IDS.auth,
     label: '账号',
     path: '/auth',
-    description: '登录、注册与当前会话管理',
+    description: 'Synapse OAuth 身份管理',
   },
   {
     id: APP_PAGE_IDS.overview,

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::types::{
-    AssetRecord, DrawingJobRecord, ExportJobRecord, IpThreatProviderConfigRecord, ProjectRecord,
-    ProjectVersionRecord, ReviewCommentRecord, SessionRecord, ShareRecord, TeamMembershipRecord,
-    TeamRecord, UploadedAsset, UserRecord,
+    AssetRecord, DrawingJobRecord, ExportJobRecord, IpThreatProviderConfigRecord,
+    OAuthStateRecord, ProjectRecord, ProjectVersionRecord, ReviewCommentRecord, ShareRecord,
+    TeamMembershipRecord, TeamRecord, UploadedAsset,
 };
 
 #[derive(Default)]
@@ -19,10 +19,6 @@ pub struct MemoryStore {
     pub teams: HashMap<String, TeamRecord>,
     pub team_memberships: HashMap<String, TeamMembershipRecord>,
     pub review_comments: HashMap<String, ReviewCommentRecord>,
-    pub users: HashMap<String, UserRecord>,
-    pub user_emails: HashMap<String, String>,
-    pub usernames: HashMap<String, String>,
-    pub sessions: HashMap<String, SessionRecord>,
-    pub session_tokens: HashMap<String, String>,
+    pub oauth_states: HashMap<String, OAuthStateRecord>,
     pub ip_threat_provider_configs: HashMap<String, IpThreatProviderConfigRecord>,
 }
