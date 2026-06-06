@@ -23,39 +23,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.1
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install frontend dependencies
-        run: npm ci
-        working-directory: frontend
+        run: pnpm install --frozen-lockfile
 
       - name: Build frontend
-        run: npm run build
-        working-directory: frontend
+        run: pnpm build
 
       - name: Upload frontend artifact
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
-          path: frontend/dist
+          path: dist
           if-no-files-found: error
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build backend
-        run: cargo build --manifest-path backend/Cargo.toml --release
+        run: cargo build --manifest-path backend/Cargo.toml --locked --release
 
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
           name: backend-linux-x86_64
-          path: backend/target/release/pixel-api
+          path: backend/target/release/geograba-backend
           if-no-files-found: error
 
   publish-image:
