@@ -123,6 +123,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.1
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -154,7 +160,9 @@ jobs:
 
       - name: Install deployment dependencies
         if: steps.deploy_config.outputs.enabled == 'true'
-        run: npm install --no-save --no-package-lock ssh2 dotenv axios form-data
+        run: |
+          mkdir -p scripts
+          pnpm --dir scripts add --lockfile=false --ignore-scripts ssh2 dotenv axios form-data
 
       - name: Download deployment script
         if: steps.deploy_config.outputs.enabled == 'true'
