@@ -130,17 +130,26 @@ jobs:
 
       - name: Check deployment configuration
         id: deploy_config
+        shell: bash
         env:
-          SERVER_ADDRESS: ${{ secrets.SERVER_ADDRESS }}
-          USERNAME: ${{ secrets.USERNAME }}
-          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-          CONTAINER_NAMES: ${{ secrets.CONTAINER_NAMES }}
+          HAS_SERVER_ADDRESS: ${{ secrets.SERVER_ADDRESS != '' }}
+          HAS_USERNAME: ${{ secrets.USERNAME != '' }}
+          HAS_PRIVATE_KEY: ${{ secrets.PRIVATE_KEY != '' }}
+          HAS_CONTAINER_NAMES: ${{ secrets.CONTAINER_NAMES != '' }}
         run: |
-          if [ -n "$SERVER_ADDRESS" ] && [ -n "$USERNAME" ] && [ -n "$PRIVATE_KEY" ] && [ -n "$CONTAINER_NAMES" ]; then
+          missing=()
+
+          [ "$HAS_SERVER_ADDRESS" = "true" ] || missing+=("SERVER_ADDRESS")
+          [ "$HAS_USERNAME" = "true" ] || missing+=("USERNAME")
+          [ "$HAS_PRIVATE_KEY" = "true" ] || missing+=("PRIVATE_KEY")
+          [ "$HAS_CONTAINER_NAMES" = "true" ] || missing+=("CONTAINER_NAMES")
+
+          if [ "${#missing[@]}" -eq 0 ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Remote deployment enabled: required repository secrets are configured."
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Remote deployment skipped: SERVER_ADDRESS, USERNAME, PRIVATE_KEY, or CONTAINER_NAMES is not configured."
+            echo "Remote deployment skipped: missing repository secrets: ${missing[*]}."
           fi
 
       - name: Install deployment dependencies
