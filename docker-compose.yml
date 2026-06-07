@@ -5,20 +5,27 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     image: geograba:local
     environment:
-      BIND_ADDR: 0.0.0.0:8080
+      BIND_ADDR: ${BIND_ADDR:-0.0.0.0:8080}
       API_BASE_URL: ${API_BASE_URL:-http://localhost:8080}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-}
       FRONTEND_DIST_DIR: /app/frontend-dist
-      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}
       MONGODB_DATABASE: ${MONGODB_DATABASE:-geograba}
       MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.openai.com/v1}
       MODEL_NAME: ${MODEL_NAME:-gpt-4.1-mini}
       API_KEY: ${API_KEY:-}
+      SYNAPSE_BASE_URL: ${SYNAPSE_BASE_URL:-https://tts.chloemlla.com}
+      SYNAPSE_OAUTH_SCOPE: ${SYNAPSE_OAUTH_SCOPE:-openid profile email admin:identity}
+      SYNAPSE_OAUTH_CLIENT_ID: ${SYNAPSE_OAUTH_CLIENT_ID:-}
+      SYNAPSE_OAUTH_CLIENT_SECRET: ${SYNAPSE_OAUTH_CLIENT_SECRET:-}
+      SYNAPSE_OAUTH_REDIRECT_URI: ${SYNAPSE_OAUTH_REDIRECT_URI:-}
     depends_on:
       - mongo
     ports:
-      - "8080:8080"
+      - "${HOST_PORT:-8080}:${CONTAINER_PORT:-8080}"
 
   mongo:
     image: mongo:8

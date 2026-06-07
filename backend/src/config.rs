@@ -32,28 +32,29 @@ impl AppConfig {
             .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 3001)));
 
         let api_base_url =
-            env::var("API_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3001".to_string());
+            env_string("API_BASE_URL").unwrap_or_else(|| "http://127.0.0.1:3001".to_string());
         let frontend_base_url =
-            env::var("FRONTEND_BASE_URL").unwrap_or_else(|_| api_base_url.clone());
+            env_string("FRONTEND_BASE_URL").unwrap_or_else(|| api_base_url.clone());
         let model_base_url =
-            env::var("MODEL_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-        let model_name = env::var("MODEL_NAME").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
-        let api_key = env::var("API_KEY").unwrap_or_default();
-        let synapse_base_url = env::var("SYNAPSE_BASE_URL")
-            .unwrap_or_else(|_| "https://tts.chloemlla.com".to_string())
+            env_string("MODEL_BASE_URL").unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let model_name = env_string("MODEL_NAME").unwrap_or_else(|| "gpt-4.1-mini".to_string());
+        let api_key = env_string("API_KEY").unwrap_or_default();
+        let synapse_base_url = env_string("SYNAPSE_BASE_URL")
+            .unwrap_or_else(|| "https://tts.chloemlla.com".to_string())
             .trim_end_matches('/')
             .to_string();
-        let synapse_oauth_client_id = env::var("SYNAPSE_OAUTH_CLIENT_ID").unwrap_or_default();
+        let synapse_oauth_client_id = env_string("SYNAPSE_OAUTH_CLIENT_ID").unwrap_or_default();
         let synapse_oauth_client_secret =
-            env::var("SYNAPSE_OAUTH_CLIENT_SECRET").unwrap_or_default();
-        let synapse_oauth_redirect_uri = env::var("SYNAPSE_OAUTH_REDIRECT_URI").unwrap_or_else(|_| {
-            format!(
-                "{}/api/v1/auth/oauth/callback",
-                api_base_url.trim_end_matches('/')
-            )
-        });
-        let synapse_oauth_scope = env::var("SYNAPSE_OAUTH_SCOPE")
-            .unwrap_or_else(|_| "openid profile email admin:identity".to_string());
+            env_string("SYNAPSE_OAUTH_CLIENT_SECRET").unwrap_or_default();
+        let synapse_oauth_redirect_uri =
+            env_string("SYNAPSE_OAUTH_REDIRECT_URI").unwrap_or_else(|| {
+                format!(
+                    "{}/api/v1/auth/oauth/callback",
+                    api_base_url.trim_end_matches('/')
+                )
+            });
+        let synapse_oauth_scope = env_string("SYNAPSE_OAUTH_SCOPE")
+            .unwrap_or_else(|| "openid profile email admin:identity".to_string());
         let model_worker_concurrency = env::var("MODEL_WORKER_CONCURRENCY")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -74,12 +75,10 @@ impl AppConfig {
             .and_then(|value| value.parse().ok())
             .unwrap_or(16)
             .max(1);
-        let frontend_dist_dir = env::var("FRONTEND_DIST_DIR").ok().map(PathBuf::from);
-        let mongodb_uri = env::var("MONGODB_URI")
-            .ok()
-            .filter(|value| !value.trim().is_empty());
+        let frontend_dist_dir = env_string("FRONTEND_DIST_DIR").map(PathBuf::from);
+        let mongodb_uri = env_string("MONGODB_URI");
         let mongodb_database =
-            env::var("MONGODB_DATABASE").unwrap_or_else(|_| "geograba".to_string());
+            env_string("MONGODB_DATABASE").unwrap_or_else(|| "geograba".to_string());
 
         Self {
             bind_addr,
@@ -102,4 +101,11 @@ impl AppConfig {
             mongodb_database,
         }
     }
+}
+
+fn env_string(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }

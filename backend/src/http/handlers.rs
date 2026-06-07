@@ -27,8 +27,7 @@ use crate::store::{
     cache_asset_payload, find_any_job_record, find_asset_payload, find_asset_record,
     find_export_job_record, find_ip_threat_provider_config, find_job_record, find_project_record,
     find_project_versions_by_project, find_review_comment_record, find_share_by_slug,
-    find_team_record,
-    list_projects_by_team, list_projects_by_user, list_projects_by_workspace,
+    find_team_record, list_projects_by_team, list_projects_by_user, list_projects_by_workspace,
     list_review_comments_by_project, list_team_memberships_by_team, list_teams_by_user,
     upsert_asset_record, upsert_export_job_record, upsert_ip_threat_provider_config,
     upsert_job_record, upsert_project_record, upsert_project_version_record,
@@ -39,8 +38,8 @@ use crate::threat_intel::build_ip_threat_provider_config;
 use crate::types::{
     AnnotationJobRequest, Diagnostics, DrawingJobCreateRequest, DrawingJobRecord,
     DrawingJobResultResponse, ExportJobCreateRequest, ExportJobRecord, ExportJobStatus,
-    IpThreatConfigUpdateRequest, JobStatus, ModelConfigUpdateRequest, ObjectExplanationRequest,
-    OAuthStateRecord, ProjectCreateRequest, ProjectRecord, ProjectUpdateRequest,
+    IpThreatConfigUpdateRequest, JobStatus, ModelConfigUpdateRequest, OAuthStateRecord,
+    ObjectExplanationRequest, ProjectCreateRequest, ProjectRecord, ProjectUpdateRequest,
     ProjectVersionCreateRequest, ProjectVersionRecord, ProjectVersionSummary, RenderHints,
     ReviewCommentCreateRequest, ReviewCommentRecord, ReviewCommentUpdateRequest,
     ScriptInsightsRequest, ShareCreateRequest, ShareRecord, TeamCreateRequest,
@@ -231,7 +230,9 @@ async fn start_synapse_oauth(
 
     {
         let mut store = state.store.write().await;
-        store.oauth_states.retain(|_, value| value.expires_at > Utc::now());
+        store
+            .oauth_states
+            .retain(|_, value| value.expires_at > Utc::now());
         store.oauth_states.insert(oauth_state.clone(), record);
     }
 
@@ -285,8 +286,7 @@ async fn complete_synapse_oauth(
             let payload = serde_json::to_vec(&session).map_err(|err| {
                 AppError::Internal(format!("unable to serialize OAuth session: {err}"))
             })?;
-            let encoded =
-                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+            let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
             Ok(redirect_response(&append_fragment_param(
                 &state_record.return_to,
                 "synapseAuth",
@@ -1861,7 +1861,10 @@ fn normalize_oauth_return_to(
         }
     }
 
-    if allowed_origins.iter().any(|origin| origin == &candidate_origin) {
+    if allowed_origins
+        .iter()
+        .any(|origin| origin == &candidate_origin)
+    {
         candidate.to_string()
     } else {
         fallback
@@ -1870,7 +1873,10 @@ fn normalize_oauth_return_to(
 
 fn origin_of(url: &url::Url) -> Option<String> {
     let host = url.host_str()?;
-    let port = url.port().map(|port| format!(":{port}")).unwrap_or_default();
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
     Some(format!("{}://{}{}", url.scheme(), host, port))
 }
 

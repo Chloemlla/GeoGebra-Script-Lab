@@ -123,7 +123,10 @@ pub async fn refresh_synapse_token(
 
     let token_response = post_synapse_token(
         state,
-        &[("grant_type", "refresh_token"), ("refresh_token", refresh_token)],
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+        ],
     )
     .await?;
 
@@ -177,7 +180,9 @@ async fn post_synapse_token(
         .form(params)
         .send()
         .await
-        .map_err(|err| AppError::Unavailable(format!("unable to reach Synapse token API: {err}")))?;
+        .map_err(|err| {
+            AppError::Unavailable(format!("unable to reach Synapse token API: {err}"))
+        })?;
     let status = response.status();
     let body = response
         .text()
@@ -207,7 +212,9 @@ async fn build_auth_session_from_token_response(
             .token_type
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "Bearer".to_string()),
-        expires_at: token_response.expires_in.map(|seconds| now + Duration::seconds(seconds)),
+        expires_at: token_response
+            .expires_in
+            .map(|seconds| now + Duration::seconds(seconds)),
         refresh_token: token_response.refresh_token,
         refresh_expires_at: token_response
             .refresh_expires_in

@@ -12,7 +12,9 @@ COPY src ./src
 COPY icon ./icon
 
 ARG VITE_BASE_PATH=/
+ARG VITE_API_BASE_URL=
 ENV VITE_BASE_PATH=${VITE_BASE_PATH}
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
 RUN pnpm build
 
@@ -40,8 +42,7 @@ ENV BIND_ADDR=0.0.0.0:8080 \
     MONGODB_URI= \
     MONGODB_DATABASE=geograba \
     MODEL_BASE_URL=https://api.openai.com/v1 \
-    MODEL_NAME=gpt-4.1-mini \
-    API_KEY=
+    MODEL_NAME=gpt-4.1-mini
 
 EXPOSE 8080
 

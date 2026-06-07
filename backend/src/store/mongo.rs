@@ -621,7 +621,6 @@ impl MongoStore {
 
         Ok(())
     }
-
 }
 
 fn document_into_record<T: DeserializeOwned>(document: Document) -> Result<T, AppError> {
