@@ -2,6 +2,7 @@ use chrono::{Duration, Utc};
 use http::header::AUTHORIZATION;
 use http::HeaderMap;
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -17,8 +18,7 @@ struct SynapseTokenResponse {
     scope: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 struct SynapseUserInfo {
     sub: Option<String>,
     id: Option<String>,
@@ -28,17 +28,14 @@ struct SynapseUserInfo {
     avatar_url: Option<String>,
     role: Option<String>,
     roles: Option<Vec<String>>,
-    #[serde(default, alias = "is_admin")]
     is_admin: Option<bool>,
-    #[serde(default, alias = "synapse_admin")]
+    is_admin_snake: Option<bool>,
     synapse_admin: Option<bool>,
-    #[serde(default)]
+    synapse_admin_snake: Option<bool>,
     admin: Option<bool>,
-    #[serde(default, alias = "is_trusted")]
     is_trusted: Option<bool>,
-    #[serde(default)]
+    is_trusted_snake: Option<bool>,
     created_at: Option<chrono::DateTime<Utc>>,
-    #[serde(default)]
     account_status: Option<String>,
 }
 
@@ -253,10 +250,128 @@ async fn fetch_synapse_userinfo(
         )));
     }
 
-    let user_info: SynapseUserInfo = serde_json::from_str(&body)
+    let user_info = parse_synapse_userinfo(&body)
         .map_err(|err| AppError::Internal(format!("invalid Synapse userinfo response: {err}")))?;
 
     normalize_synapse_user(user_info)
+}
+
+fn parse_synapse_userinfo(body: &str) -> Result<SynapseUserInfo, String> {
+    let value: Value = serde_json::from_str(body).map_err(|err| err.to_string())?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "expected JSON object".to_string())?;
+
+    Ok(SynapseUserInfo {
+        sub: optional_string_field(object, "sub")?,
+        id: optional_string_field(object, "id")?,
+        username: optional_string_field(object, "username")?,
+        name: optional_string_field(object, "name")?,
+        email: optional_string_field(object, "email")?,
+        avatar_url: optional_string_any(object, &["avatarUrl", "avatar_url"])?,
+        role: optional_string_field(object, "role")?,
+        roles: optional_string_array_field(object, "roles")?,
+        is_admin: optional_bool_field(object, "isAdmin")?,
+        is_admin_snake: optional_bool_field(object, "is_admin")?,
+        synapse_admin: optional_bool_field(object, "synapseAdmin")?,
+        synapse_admin_snake: optional_bool_field(object, "synapse_admin")?,
+        admin: optional_bool_field(object, "admin")?,
+        is_trusted: optional_bool_field(object, "isTrusted")?,
+        is_trusted_snake: optional_bool_field(object, "is_trusted")?,
+        created_at: optional_datetime_any(object, &["createdAt", "created_at"])?,
+        account_status: optional_string_any(object, &["accountStatus", "account_status"])?,
+    })
+}
+
+fn optional_string_field(
+    object: &Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<String>, String> {
+    optional_string_any(object, &[field])
+}
+
+fn optional_string_any(
+    object: &Map<String, Value>,
+    fields: &[&'static str],
+) -> Result<Option<String>, String> {
+    for field in fields {
+        let Some(value) = object.get(*field) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        return match value {
+            Value::String(value) => Ok(Some(value.clone())),
+            _ => Err(format!("field `{field}` must be a string")),
+        };
+    }
+
+    Ok(None)
+}
+
+fn optional_bool_field(
+    object: &Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<bool>, String> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    match value {
+        Value::Bool(value) => Ok(Some(*value)),
+        _ => Err(format!("field `{field}` must be a boolean")),
+    }
+}
+
+fn optional_string_array_field(
+    object: &Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let Value::Array(values) = value else {
+        return Err(format!("field `{field}` must be an array of strings"));
+    };
+
+    values
+        .iter()
+        .map(|value| match value {
+            Value::String(value) => Ok(value.clone()),
+            _ => Err(format!("field `{field}` must be an array of strings")),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn optional_datetime_any(
+    object: &Map<String, Value>,
+    fields: &[&'static str],
+) -> Result<Option<chrono::DateTime<Utc>>, String> {
+    for field in fields {
+        let Some(value) = object.get(*field) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let Value::String(value) = value else {
+            return Err(format!("field `{field}` must be an RFC 3339 timestamp"));
+        };
+        let parsed = chrono::DateTime::parse_from_rfc3339(value)
+            .map_err(|err| format!("field `{field}` must be an RFC 3339 timestamp: {err}"))?;
+        return Ok(Some(parsed.with_timezone(&Utc)));
+    }
+
+    Ok(None)
 }
 
 fn normalize_synapse_user(user_info: SynapseUserInfo) -> Result<UserProfile, AppError> {
@@ -288,10 +403,14 @@ fn normalize_synapse_user(user_info: SynapseUserInfo) -> Result<UserProfile, App
         .trim()
         .to_ascii_lowercase();
     let is_admin = user_info.is_admin.unwrap_or(false)
+        || user_info.is_admin_snake.unwrap_or(false)
         || user_info.synapse_admin.unwrap_or(false)
+        || user_info.synapse_admin_snake.unwrap_or(false)
         || user_info.admin.unwrap_or(false)
         || role == "admin";
-    let is_trusted = user_info.is_trusted.unwrap_or(false) || role == "trusted";
+    let is_trusted = user_info.is_trusted.unwrap_or(false)
+        || user_info.is_trusted_snake.unwrap_or(false)
+        || role == "trusted";
     let account_status = user_info
         .account_status
         .unwrap_or_else(|| "active".to_string())
@@ -323,4 +442,45 @@ fn normalize_synapse_user(user_info: SynapseUserInfo) -> Result<UserProfile, App
         created_at: user_info.created_at,
         last_login_at: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_synapse_userinfo_with_compatibility_identity_fields() {
+        let body = r#"{
+            "sub": "admin-user-id",
+            "id": "admin-user-id",
+            "username": "admin",
+            "name": "Administrator",
+            "avatarUrl": "https://cdn.example.com/avatar.png",
+            "role": "admin",
+            "roles": ["admin"],
+            "isAdmin": true,
+            "is_admin": true,
+            "admin": true,
+            "synapseAdmin": true,
+            "synapse_admin": true,
+            "isTrusted": false,
+            "is_trusted": false,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "accountStatus": "active",
+            "email": "admin@example.com"
+        }"#;
+
+        let user_info = parse_synapse_userinfo(body).expect("userinfo should parse");
+        let user = normalize_synapse_user(user_info).expect("admin user should normalize");
+
+        assert_eq!(user.user_id, "admin-user-id");
+        assert_eq!(user.username, "admin");
+        assert!(user.is_admin);
+        assert!(!user.is_trusted);
+        assert_eq!(
+            user.avatar_url.as_deref(),
+            Some("https://cdn.example.com/avatar.png")
+        );
+        assert!(user.created_at.is_some());
+    }
 }
