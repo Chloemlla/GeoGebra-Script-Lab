@@ -40,7 +40,7 @@ impl AppConfig {
         let model_name = env_string("MODEL_NAME").unwrap_or_else(|| "gpt-4.1-mini".to_string());
         let api_key = env_string("API_KEY").unwrap_or_default();
         let synapse_base_url = env_string("SYNAPSE_BASE_URL")
-            .unwrap_or_else(|| "https://tts.chloemlla.com".to_string())
+            .unwrap_or_else(|| "https://chloemlla.com".to_string())
             .trim_end_matches('/')
             .to_string();
         let synapse_oauth_client_id = env_string("SYNAPSE_OAUTH_CLIENT_ID").unwrap_or_default();

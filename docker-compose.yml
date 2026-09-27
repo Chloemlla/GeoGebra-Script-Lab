@@ -17,7 +17,7 @@ services:
       MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.openai.com/v1}
       MODEL_NAME: ${MODEL_NAME:-gpt-4.1-mini}
       API_KEY: ${API_KEY:-}
-      SYNAPSE_BASE_URL: ${SYNAPSE_BASE_URL:-https://tts.chloemlla.com}
+      SYNAPSE_BASE_URL: ${SYNAPSE_BASE_URL:-https://chloemlla.com}
       SYNAPSE_OAUTH_SCOPE: ${SYNAPSE_OAUTH_SCOPE:-openid profile email admin:identity}
       SYNAPSE_OAUTH_CLIENT_ID: ${SYNAPSE_OAUTH_CLIENT_ID:-}
       SYNAPSE_OAUTH_CLIENT_SECRET: ${SYNAPSE_OAUTH_CLIENT_SECRET:-}
